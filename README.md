@@ -26,9 +26,17 @@
   - 營地與車子下方有**地形平整墊**（`PADS`，`h()` 把 `_h_raw()` 往墊中心高度混合），道具才不會一邊懸空
   - 營地有一顆 `ReflectionProbe`（box projection），鍍鉻與玻璃反射周圍的樹
 - 獨木舟、睡蓮、告示牌、柴堆：Kenney Nature Kit（CC0，`assets/nature/`）
+- **兩個 Q 版露營者**（`proplib.camper_roast / camper_brew`，約 2.9 頭身、多零件階層的 GLB）：一個戴毛帽坐在紅椅上烤棉花糖，
+  一個戴漁夫帽站在木箱上手沖咖啡（桌子對他來說太高）。頭、手臂、壺各自是原點在關節上的節點，
+  Godot 端 `_campers_tick()` 用幾個不成比例的正弦慢慢晃（`anims`）；手沖壺每 7 秒傾倒一次，
+  水柱跟著壺嘴（GLB 裡的空物件 `*_tip`）走、長度縮放到濾杯口；沖好的那杯與三腳架上的水壺冒蒸氣（`_steam()`）
+- **環境音**（`tools/gen_audio.py`，純 numpy 合成、不用任何素材）：風、鳥、蟋蟀＋貓頭鷹是不定位的環境層，
+  營火與池塘是 3D 音源（鏡頭推近營地火聲變大）；五層音量跟著日／黃昏／夜一起漸變（`TOD_PRESETS` 的 `a_*`），**M** 靜音
 
 ![preview](preview_diorama.png)
 ![camp](preview_diorama_camp.png)
+![campers](preview_campers.png)
+![campers night](preview_campers_night.png)
 ![aerial](preview_diorama_aerial.png)
 ![van](preview_diorama_van.png)
 ![van side](preview_diorama_van_side.png)
@@ -47,7 +55,13 @@ $B --background --python tools/gen_assets.py -- "$PWD/assets/gen" hybrid       #
 $B --background --python tools/lineup.py -- "$PWD/assets/gen" out.png "tree_"  # 型錄圖（可用前綴篩選）
 $B --background --python tools/leaf_levels.py -- out.png                        # 六種葉子做法比較
 $B --background --python tools/leaf_shapes.py -- out.png                        # 三種葉形比較
+$B --background --python tools/gen_assets.py -- "$PWD/assets/gen" only=camper,coffee   # 只生成名稱符合前綴的（改角色不用重跑整批樹）
+PY=$(ls -d /Applications/Blender.app/Contents/Resources/*/python/bin/python3* | head -1)   # 系統 python 沒 numpy，借 Blender 的
+$PY tools/gen_audio.py audio && for f in wind birds crickets fire water; do ffmpeg -y -i audio/$f.wav -c:a vorbis -strict -2 -q:a 5 audio/$f.ogg; done && rm audio/*.wav
+Godot --headless --path . --import                                              # 新增的資產要先讓 Godot 匯入一次
 ```
+- `tools/gen_audio.py`：所有濾波在頻域做（rfft × 響應 → irfft ＝ 循環卷積），慢速起伏用整數週期的正弦，
+  事件超出尾端就繞回開頭——每段天生就是無縫循環。ffmpeg 內建的 Vorbis 編碼器只收雙聲道，所以 WAV 一律輸出立體聲。
 - `tools/proplib.py`：營地道具（`glamping_tent / camper_van / camp_chair / camp_table / lantern / campfire / tripod_kettle / crate / cooler`），
   用小型建模器 `B`（box / cyl / rod / prism / tri，`use(mat)` 指定材質）拼出來；材質名稱在 Godot 端由 `PROP_MATS` 調質感
 - `tools/treelib.py` 是生成函式庫：`tree_broadleaf / tree_pine_detailed / grass_tuft / bush / fern / flower / mushroom / rock / log_ / stump`
@@ -86,7 +100,7 @@ $B --background --python tools/leaf_shapes.py -- out.png                        
   串燈亮度也跟時段走（白天 0.5 → 夜晚 3.0）。
 
 ## 展示影片
-`video/demo.mp4`（30 秒、1920×1080、30 fps、H.264、約 72 MB）。
+`video/demo.mp4`（30 秒、1920×1080、30 fps、H.264 + AAC 環境音、約 72 MB；不進 git，用下面的指令重新輸出）。
 
 ![demo frames](preview_demo_video.png)
 `--demo=30` 模式：鏡頭廣角慢繞 → 推進到營地 → 低角度環繞營火，
@@ -95,9 +109,9 @@ $B --background --python tools/leaf_shapes.py -- out.png                        
 printf '[display]\nwindow/size/viewport_width=1920\nwindow/size/viewport_height=1080\n' > override.cfg
 Godot --path . --write-movie video/demo.avi --fixed-fps 30 --quit-after 915 -- --demo=30
 rm override.cfg
-ffmpeg -i video/demo.avi -an -vf "fps=30,format=yuv420p" -c:v libx264 -crf 17 -movflags +faststart video/demo.mp4
+ffmpeg -i video/demo.avi -vf "fps=30,format=yuv420p" -c:v libx264 -crf 17 -c:a aac -b:a 160k -movflags +faststart video/demo.mp4
 ```
-（Movie Maker 寫 MJPEG AVI，再用 ffmpeg 轉 H.264；`--demo=N` 的排程與運鏡都以 N 的比例算，改秒數就會等比縮放。
+（Movie Maker 寫 MJPEG AVI 並把環境音一起錄進去，再用 ffmpeg 轉 H.264／AAC；`--demo=N` 的排程與運鏡都以 N 的比例算，改秒數就會等比縮放。
 **Movie Maker 的輸出尺寸 = 專案的 viewport 設定**，`--resolution` 或程式裡改視窗大小都不會影響它，
 要 1080p 得用 `override.cfg` 暫時蓋掉專案設定。）
 
@@ -121,16 +135,19 @@ ffmpeg -i video/demo.avi -an -vf "fps=30,format=yuv420p" -c:v libx264 -crf 17 -m
 
 ## 執行
 - 用 Godot 開這個資料夾，按 **F5**；或命令列 `Godot --path .`
-- 操作：**滑鼠拖曳**環繞、**滾輪**縮放；放著不動 4 秒會緩慢自轉
+- 操作：**滑鼠拖曳**環繞、**滾輪**縮放；放著不動 4 秒會緩慢自轉；**N** 日／黃昏／夜、**A** 自動循環、**M** 靜音
 
 ## 檔案
 - `forest.tscn` + `scripts/forest.gd` — Diorama 場景（主場景）
   - `h()` 地形高度、`_build_ground()` 地台與土層側面、`_build_water()` 池塘
   - `_build_grass()` 草叢 MultiMesh（隨風搖）、`_build_forest()` 樹林、`_build_understory()` 灌木蕨類花草石頭
   - `_build_props()` 營地／池塘擺設、`_setup_env()` 光線與背景、`_build_camera()` 環繞鏡頭與景深
+  - `_build_campers()` 兩個露營者（`place_scene()` 保留 GLB 節點階層）、`_campers_tick()` 程式動畫、`_steam()` 蒸氣粒子
+  - `_build_audio()` 環境音（`audio/*.ogg`，循環）、`_style_mesh()` 材質替換（`kenney_mesh` 與 `place_scene` 共用）
   - `PALETTE` — 材質名稱 → 森林配色（改這裡就能換整體色調）
   - `kenney_mesh(name)`：名稱含 `/` 就從 `res://assets/<name>.glb` 載入（例 `gen/tree_round_A`），否則從 Kenney 資料夾
-- `tools/` — Blender 資產生成腳本（見上）
+- `tools/` — Blender 資產生成腳本（見上）；`tools/gen_audio.py` 環境音合成
+- `audio/` — 五段無縫循環的 OGG（風 24 s、鳥 32 s、蟋蟀 30 s、營火 16 s、池塘 24 s，共 2.3 MB）
 - `main.tscn` + `scripts/main.gd` + `scripts/player.gd` — 先前的「風車齒輪」小遊戲，保留但不是主場景
   （要玩的話在 project.godot 把 `run/main_scene` 改成 `res://main.tscn`）
 - `tests/` — 只針對小遊戲的 headless 測試
@@ -139,7 +156,7 @@ ffmpeg -i video/demo.avi -an -vf "fps=30,format=yuv420p" -c:v libx264 -crf 17 -m
 - `--orbit=yaw,pitch,dist` 固定環繞鏡頭角度（例：`--orbit=38,-33,72`）
 - `--cam=x,y,z,tx,ty,tz[,fov]` 任意相機位置看向目標（fov 預設 28）；`--cam-rel=…` 同上但 y 相對地面高度
 - `--demo=<秒>` 展示影片運鏡（見上）
-- `--dusk` 黃昏、`--night` 夜晚（瞬間）；`--auto` 自動循環；`--to=dusk|night` 啟動後開始 10 秒漸變，`--tod-seek=<秒>` 直接跳到漸變第幾秒（截圖用），`--tod-debug` 每秒印進度
+- `--dusk` 黃昏、`--night` 夜晚（瞬間）；`--auto` 自動循環；`--mute` 靜音；`--to=dusk|night` 啟動後開始 30 秒漸變，`--tod-seek=<秒>` 直接跳到漸變第幾秒（截圖用），`--tod-debug` 每秒印進度
 - `--no-dof` / `--no-glow` / `--flat`（關 SSAO/SSIL）/ `--no-shadow` / `--no-water`
 - `--bench`（量 fps）/ `--tree-dir=gen`（換一組樹）
 - `--ground-dbg=1|2|3` 地面 shader 診斷輸出
@@ -194,3 +211,9 @@ Godot --path . --write-movie /tmp/shot/f.png --fixed-fps 30 --quit-after 45 -- -
   看起來像「地面透明」或「側面全黑」。
 - `background_mode = BG_COLOR` 時天空不渲染，`AMBIENT_SOURCE_SKY` 的環境光會變成零；
   要純色背景就用 ProceduralSky 把顏色畫成一致。
+- **Movie Maker 慢速渲染時，靠 `Time.get_ticks_msec()` 跑的動畫會被加速**：`--fixed-fps 30` 讓每一幀的 `delta` 固定 1/30 秒，
+  但 ticks 走的是牆上時鐘——渲染一幀花 0.3 秒，動畫就快了 9 倍。露營者的晃動與手沖節奏改用累加的 `delta`（`anim_t`），
+  火光閃爍那種本來就快的高頻抖動留在 ticks 無所謂。
+- `_style_mesh()` 裡 `PROP_MATS` 的 `specular` 一直沒生效：套完之後有一行無條件的 `metallic_specular = 0.5` 把它蓋掉了
+  （玻璃寫 0.15 其實一直是 0.5）。改成 else 分支。
+- Godot 4 只吃 WAV／OGG Vorbis／MP3，ffmpeg 內建的 `vorbis` 編碼器要加 `-strict -2` 而且**只支援雙聲道**——單聲道的營火也要輸出成立體聲。

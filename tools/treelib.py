@@ -328,7 +328,19 @@ def export_glb(ob, path):
                               export_apply=True, export_vertex_color="ACTIVE")
 
 
+def export_glb_objs(objs, path):
+    """多物件（含父子階層、空物件）一起匯出成一個 GLB：關節動畫用的角色。"""
+    bpy.ops.object.select_all(action="DESELECT")
+    for ob in objs:
+        ob.select_set(True)
+    bpy.context.view_layer.objects.active = objs[0]
+    bpy.ops.export_scene.gltf(filepath=path, export_format="GLB", use_selection=True,
+                              export_apply=True, export_vertex_color="ACTIVE")
+
+
 def tri_count(ob):
+    if ob.type != 'MESH':
+        return 0
     return sum(len(p.vertices) - 2 for p in ob.data.polygons)
 
 

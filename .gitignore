@@ -7,3 +7,4 @@ video/*.avi
 video/*.mp4
 video/render.log
 .DS_Store
+__pycache__/

@@ -50,6 +50,11 @@ const PROP_MATS := {
 	"bagCoral": {"roughness": 0.85}, "coolerBlue": {"roughness": 0.35, "clearcoat": 0.3},
 	"tentGreen": {"roughness": 0.95}, "tentBeige": {"roughness": 0.95}, "tentFloor": {"roughness": 0.9}, "tentMesh": {"roughness": 1.0},
 	"rubber": {"roughness": 0.85}, "canvas": {"roughness": 0.95}, "canvasTrim": {"roughness": 0.95},
+	# 露營者
+	"skin": {"roughness": 0.7}, "eyeDark": {"roughness": 0.15}, "blush": {"roughness": 0.8},
+	"puffMustard": {"roughness": 0.5}, "fleecePlum": {"roughness": 0.95}, "beanieRed": {"roughness": 0.95},
+	"mitten": {"roughness": 0.8}, "toast": {"roughness": 0.6},
+	"copper": {"roughness": 0.3, "metallic": 0.85}, "dripperTerra": {"roughness": 0.45, "clearcoat": 0.25}, "coffee": {"roughness": 0.15},
 }
 
 const GROUND_SHADER := """
@@ -239,6 +244,19 @@ var flame_mats: Array[ShaderMaterial] = []
 var flame_shader: Shader
 var bulb_mats_all: Array[StandardMaterial3D] = []
 
+# 露營者：程式動畫（{n, base, terms=[[axis, amp, hz, phase], …]}）、手沖壺與水柱
+var anims: Array[Dictionary] = []
+var anim_t := 0.0
+var kettle: Node3D
+var kettle_tip: Node3D
+var pour: Node3D
+var pour_y := 0.0
+
+# 環境音：名稱 → AudioStreamPlayer（風、鳥、蟲）或 AudioStreamPlayer3D（營火、池塘）；音量在 TOD_PRESETS 的 a_* 鍵
+var amb := {}
+var muted := false
+const AMB_BASE_DB := {"wind": -10.0, "birds": -9.0, "crickets": -9.0, "fire": 2.0, "water": -4.0}
+
 ## 三個時段的所有參數（float / Color / Vector3 都可以線性插值）
 const TOD_PRESETS := {
 	TimeOfDay.DAY: {
@@ -249,6 +267,7 @@ const TOD_PRESETS := {
 		"sun_rot": Vector3(-44, 32, 0), "sun_c": Color(1.0, 0.95, 0.85), "sun_e": 1.3, "sun_body": 0.0,
 		"head": 0.0, "cabin": 1.0, "fire": 1.6, "fire_r": 4.5, "lantern": 0.0, "tent": 0.0, "bulbs": 0.5,
 		"ff": 0.0, "head_glow": 0.0, "tail_glow": 0.0,
+		"a_wind": 0.7, "a_birds": 1.0, "a_crickets": 0.0, "a_fire": 0.8, "a_water": 0.6,
 	},
 	TimeOfDay.DUSK: {
 		"sky_top": Color(0.30, 0.34, 0.62), "sky_h": Color(1.0, 0.72, 0.46), "gnd_h": Color(0.78, 0.58, 0.48), "gnd_b": Color(0.30, 0.26, 0.30),
@@ -258,6 +277,7 @@ const TOD_PRESETS := {
 		"sun_rot": Vector3(-18, 62, 0), "sun_c": Color(1.0, 0.74, 0.44), "sun_e": 1.7, "sun_body": 0.0,
 		"head": 3.0, "cabin": 1.6, "fire": 3.0, "fire_r": 5.5, "lantern": 1.4, "tent": 1.0, "bulbs": 2.2,
 		"ff": 1.2, "head_glow": 2.0, "tail_glow": 1.2,
+		"a_wind": 0.5, "a_birds": 0.35, "a_crickets": 0.7, "a_fire": 1.0, "a_water": 0.6,
 	},
 	TimeOfDay.NIGHT: {
 		"sky_top": Color(0.02, 0.03, 0.09), "sky_h": Color(0.09, 0.11, 0.22), "gnd_h": Color(0.06, 0.07, 0.12), "gnd_b": Color(0.02, 0.02, 0.04),
@@ -267,6 +287,7 @@ const TOD_PRESETS := {
 		"sun_rot": Vector3(-52, 140, 0), "sun_c": Color(0.55, 0.65, 0.95), "sun_e": 0.42, "sun_body": 1.0,   # 1 = 月亮
 		"head": 6.0, "cabin": 3.0, "fire": 4.5, "fire_r": 7.0, "lantern": 2.5, "tent": 2.0, "bulbs": 3.0,
 		"ff": 2.5, "head_glow": 3.5, "tail_glow": 2.0,
+		"a_wind": 0.35, "a_birds": 0.0, "a_crickets": 1.0, "a_fire": 1.0, "a_water": 0.5,
 	},
 }
 var sun: DirectionalLight3D
@@ -321,6 +342,7 @@ func _ready() -> void:
 	_build_understory()
 	_build_props()
 	_build_dust()
+	_build_audio()
 	_build_camera()
 	_build_help()
 	set_time(TimeOfDay.DAY, true)
@@ -368,6 +390,9 @@ func _ready() -> void:
 			tod_debug = true
 		elif arg == "--auto":
 			auto_cycle = true
+		elif arg == "--mute":
+			muted = true
+			_apply_state(tod_cur)
 		elif arg.begins_with("--demo="):
 			demo_len = float(arg.trim_prefix("--demo="))
 			cam_locked = true
@@ -679,7 +704,15 @@ func kenney_mesh(model_name: String) -> Array:
 	var path := ("res://assets/" + model_name + ".glb") if "/" in model_name else (NATURE + model_name + ".glb")
 	var sc: Node3D = (load(path) as PackedScene).instantiate()
 	var mi: MeshInstance3D = sc.find_children("*", "MeshInstance3D", true, false)[0]
-	var mesh: ArrayMesh = mi.mesh.duplicate()
+	var result := [_style_mesh(mi.mesh), mi.transform]
+	_mesh_cache[model_name] = result
+	sc.free()
+	return result
+
+
+func _style_mesh(src: Mesh) -> ArrayMesh:
+	## 複製一份 mesh，把 Blender 端的材質名稱換成森林配色／PROP_MATS 質感／葉子與火焰 shader
+	var mesh: ArrayMesh = src.duplicate()
 	for i in mesh.get_surface_count():
 		var m := mesh.surface_get_material(i) as StandardMaterial3D
 		if m == null:
@@ -718,7 +751,8 @@ func kenney_mesh(model_name: String) -> Array:
 				m.cull_mode = BaseMaterial3D.CULL_DISABLED
 			if pmv.has("specular"):
 				m.metallic_specular = pmv["specular"]
-			m.metallic_specular = 0.5
+			else:
+				m.metallic_specular = 0.5
 		elif not m.emission_enabled:
 			m.roughness = 0.9
 		if m.emission_enabled and m.resource_name in ["flameOrange", "flameYellow"]:
@@ -740,10 +774,7 @@ func kenney_mesh(model_name: String) -> Array:
 				night_mats[m.resource_name] = []
 			night_mats[m.resource_name].append(m)
 		mesh.surface_set_material(i, m)
-	var result := [mesh, mi.transform]
-	_mesh_cache[model_name] = result
-	sc.free()
-	return result
+	return mesh
 
 
 func place_multimesh(model_name: String, xf: Array[Transform3D], cols: Array[Color], shadows := true) -> void:
@@ -774,6 +805,16 @@ func place_one(model_name: String, x: float, z: float, s: float, rot := 0.0, y_o
 	mi.transform = Transform3D(Basis(Vector3.UP, rot).scaled(Vector3.ONE * s), Vector3(x, y, z)) * km[1]
 	add_child(mi)
 	return mi
+
+
+func place_scene(model_name: String, x: float, z: float, rot := 0.0, y_off := 0.0) -> Node3D:
+	## 多零件的 GLB（露營者）：保留節點階層原樣放進場景，每個 MeshInstance3D 的材質都過一次 _style_mesh
+	var sc: Node3D = (load("res://assets/" + model_name + ".glb") as PackedScene).instantiate()
+	for mi: MeshInstance3D in sc.find_children("*", "MeshInstance3D", true, false):
+		mi.mesh = _style_mesh(mi.mesh)
+	sc.transform = Transform3D(Basis(Vector3.UP, rot), Vector3(x, h(x, z) + y_off, z))
+	add_child(sc)
+	return sc
 
 
 func _xf(x: float, z: float, s: float, y_off := 0.0) -> Transform3D:
@@ -908,6 +949,10 @@ func _build_props() -> void:
 		var d: Vector2 = FIRE - cp
 		place_one(chairs[i], cp.x, cp.y, 1.0, atan2(-d.y, d.x), 0.0)   # 椅子（模型 +X）面向營火
 	place_one("gen/camp_table", TABLE.x, TABLE.y, 1.0, 0.35, 0.0)
+	_build_campers(FIRE + offs[1])
+	# 三腳架上的水壺冒著蒸氣
+	var kt := Vector3(FIRE.x, 0.0, FIRE.y) + Basis(Vector3.UP, 1.1) * Vector3(0.28, 0.0, 0.0)
+	_steam(Vector3(kt.x, h(kt.x, kt.z) + 1.10, kt.z), 8)
 	place_one("gen/lantern", TABLE.x + 0.28, TABLE.y - 0.12, 1.0, 0.0, 0.74)
 	lantern_light = OmniLight3D.new()
 	lantern_light.position = Vector3(TABLE.x + 0.28, h(TABLE.x + 0.28, TABLE.y - 0.12) + 1.0, TABLE.y - 0.12)
@@ -964,6 +1009,128 @@ func _build_props() -> void:
 	# 池邊大石
 	place_one("gen/rock_large_A", POND.x + 5.4, POND.y + 4.6, 2.8, 0.7, -0.1)
 	place_one("gen/rock_large_B", POND.x - 3.8, POND.y - 4.9, 2.2, 1.9, -0.06)
+
+
+func _build_campers(chair: Vector2) -> void:
+	# 烤棉花糖的：坐在紅椅子上，跟椅子同一個朝向（模型 +X 面向營火）
+	var d: Vector2 = FIRE - chair
+	var rot := atan2(-d.y, d.x)
+	var roaster := place_scene("gen/camper_roast", chair.x, chair.y, rot, 0.0)
+	_anim(roaster.find_child("*_arms", true, false), Vector3.ZERO, [[2, 0.06, 0.28, 0.0], [1, 0.045, 0.19, 1.3]])
+	_anim(roaster.find_child("*_head", true, false), Vector3.ZERO, [[2, 0.05, 0.22, 2.0], [0, 0.04, 0.15, 0.7]])
+	var side := Basis(Vector3.UP, rot) * Vector3(-0.1, 0.0, 0.5)
+	place_one("gen/marshmallow_bag", chair.x + side.x, chair.y + side.z, 1.0, rot + 0.4, 0.0)
+	# 手沖咖啡的：站在桌邊的木箱上（桌子對 2.9 頭身來說太高），壺嘴正對桌上的濾杯
+	var tb := Basis(Vector3.UP, 0.35)   # 桌子的朝向（和 place_one 給桌子的 rot 一樣）
+	var tp := Vector3(TABLE.x, 0.0, TABLE.y)
+	var bp := tp + tb * Vector3(-0.05, 0.0, 0.64)
+	place_one("gen/crate_A", bp.x, bp.z, 1.0, 0.35, 0.0)
+	var brewer := place_scene("gen/camper_brew", bp.x, bp.z, 0.35 + PI / 2.0, 0.38)
+	_anim(brewer.find_child("*_head", true, false), Vector3(0.0, 0.0, -0.12), [[2, 0.03, 0.25, 0.0], [1, 0.04, 0.16, 1.1]])
+	_anim(brewer.find_child("*_arm_l", true, false), Vector3.ZERO, [[2, 0.03, 0.23, 0.5]])
+	kettle = brewer.find_child("*_kettle", true, false)
+	kettle_tip = brewer.find_child("*_tip", true, false)
+	pour = brewer.find_child("*_pour", true, false)
+	var cs := tp + tb * Vector3(0.09, 0.0, 0.0)
+	place_one("gen/coffee_set", cs.x, cs.z, 1.0, 0.35, 0.74)
+	pour_y = h(cs.x, cs.z) + 0.74 + 0.19   # 水柱落到濕咖啡粉那一層
+	var mug := tp + tb * Vector3(-0.02, 0.0, -0.10)   # 旁邊那杯沖好的
+	_steam(Vector3(mug.x, h(mug.x, mug.z) + 0.74 + 0.11, mug.z), 10)
+
+
+func _anim(n: Node3D, base: Vector3, terms: Array) -> void:
+	if n != null:
+		anims.append({"n": n, "base": base, "terms": terms})
+
+
+func _campers_tick(delta: float) -> void:
+	anim_t += delta   # 用累加的 delta 而不是 ticks：Movie Maker 慢速渲染時動畫才不會被加速
+	var t := anim_t
+	for a in anims:
+		var r: Vector3 = a["base"]
+		for tm in a["terms"]:
+			r[tm[0]] += tm[1] * sin(t * tm[2] * TAU + tm[3])
+		(a["n"] as Node3D).rotation = r
+	if kettle == null:
+		return
+	# 手沖：每 7 秒一輪——舉壺傾倒 3 秒、放回；水柱跟著壺嘴走、長度縮放到濾杯口
+	var p := fmod(t, 7.0)
+	var tilt := smoothstep(0.6, 1.6, p) * (1.0 - smoothstep(4.2, 5.2, p))
+	kettle.rotation.z = -0.42 * tilt
+	var tip := kettle_tip.global_position
+	pour.visible = tilt > 0.6
+	pour.global_position = tip
+	pour.scale.y = maxf(0.05, (tip.y - pour_y) / 0.3)
+
+
+func _steam(pos: Vector3, amount: int) -> void:
+	var fx := CPUParticles3D.new()
+	fx.amount = amount
+	fx.lifetime = 2.4
+	fx.preprocess = 2.4
+	fx.position = pos
+	fx.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	fx.emission_sphere_radius = 0.03
+	fx.direction = Vector3.UP
+	fx.spread = 12.0
+	fx.gravity = Vector3.ZERO
+	fx.initial_velocity_min = 0.10
+	fx.initial_velocity_max = 0.16
+	var sc := Curve.new()
+	sc.add_point(Vector2(0.0, 0.4))
+	sc.add_point(Vector2(1.0, 1.6))
+	fx.scale_amount_curve = sc
+	var g := Gradient.new()
+	g.set_color(0, Color(1, 1, 1, 0.0))
+	g.set_color(1, Color(1, 1, 1, 0.0))
+	g.add_point(0.25, Color(1, 1, 1, 0.35))
+	fx.color_ramp = g
+	var q := QuadMesh.new()
+	q.size = Vector2(0.06, 0.06)
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.albedo_color = Color(1, 1, 1, 0.5)
+	m.vertex_color_use_as_albedo = true
+	m.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	q.material = m
+	fx.mesh = q
+	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(fx)
+
+
+func _build_audio() -> void:
+	# 風／鳥／蟲是不定位的環境層；營火與池塘是 3D 音源，鏡頭推近營地時火聲會變大、轉到另一側會偏到一邊
+	for nm: String in ["wind", "birds", "crickets"]:
+		var p := AudioStreamPlayer.new()
+		p.stream = _loop_stream(nm)
+		p.volume_db = -80.0
+		add_child(p)
+		p.play()
+		amb[nm] = p
+	var spots := {"fire": Vector3(FIRE.x, h(FIRE.x, FIRE.y) + 0.4, FIRE.y), "water": Vector3(POND.x, WATER_Y + 0.2, POND.y)}
+	for nm: String in spots:
+		var p3 := AudioStreamPlayer3D.new()
+		p3.stream = _loop_stream(nm)
+		p3.position = spots[nm]
+		p3.unit_size = 10.0 if nm == "fire" else 12.0
+		p3.max_db = 3.0
+		p3.attenuation_filter_cutoff_hz = 6000.0
+		p3.volume_db = -80.0
+		add_child(p3)
+		p3.play()
+		amb[nm] = p3
+
+
+func _loop_stream(nm: String) -> AudioStream:
+	var s: AudioStream = load("res://audio/%s.ogg" % nm)
+	if s is AudioStreamOggVorbis:
+		(s as AudioStreamOggVorbis).loop = true
+	elif s is AudioStreamWAV:
+		var w := s as AudioStreamWAV
+		w.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		w.loop_end = w.data.size() / 4
+	return s
 
 
 func _string_lights(a: Vector3, b: Vector3, bulbs: int) -> void:
@@ -1129,6 +1296,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			auto_cycle = not auto_cycle
 			auto_timer = 0.0
 			return
+		if kc == KEY_M:
+			muted = not muted
+			_apply_state(tod_cur)
+			return
 	if cam_locked:
 		return
 	if event is InputEventMouseButton:
@@ -1156,6 +1327,7 @@ func _process(delta: float) -> void:
 			auto_timer = 0.0
 			set_time((tod + 1) % 3)
 	_flicker()
+	_campers_tick(delta)
 	if cam_locked:
 		idle = 0.0
 	if bench:
@@ -1324,6 +1496,10 @@ func _apply_state(st: Dictionary) -> void:
 	dust_mat.emission_enabled = ff > 0.02
 	dust_mat.emission = Color(0.6, 1.0, 0.3)
 	dust_mat.emission_energy_multiplier = ff
+	# 環境音：a_* 是線性音量（0–1），配上每一層的基準 dB；靜音或 0 就壓到 -80 dB
+	for nm: String in amb:
+		var v: float = st.get("a_" + nm, 0.0)
+		(amb[nm] as Node).set("volume_db", -80.0 if (muted or v < 0.005) else AMB_BASE_DB[nm] + linear_to_db(v))
 	# 車燈罩、尾燈自發光
 	for nm: String in NIGHT_MATS:
 		var e: float = st["head_glow"] if nm == "headlightGlass" else st["tail_glow"]
@@ -1339,7 +1515,7 @@ func _build_help() -> void:
 	var font := SystemFont.new()
 	font.font_names = PackedStringArray(["PingFang TC", "Heiti TC", "Noto Sans CJK TC", "sans-serif"])
 	var l := Label.new()
-	l.text = "拖曳旋轉　滾輪縮放　N 日／黃昏／夜（10 秒漸變）　A 自動循環"
+	l.text = "拖曳旋轉　滾輪縮放　N 日／黃昏／夜（30 秒漸變）　A 自動循環　M 靜音"
 	l.add_theme_font_override("font", font)
 	l.add_theme_font_size_override("font_size", 14)
 	l.add_theme_color_override("font_color", Color(0.3, 0.35, 0.4, 0.7))

@@ -32,7 +32,14 @@ def pm():
                        # 粉彩色以「目標 sRGB 反推的線性值」填：mint #7FD8C0、cream #F5E6A3、coral #F2A0A0、blue #8EC5F0
                        ("headlightGlass", (0.70, 0.82, 0.95)),
                        ("vanMint", (0.21, 0.69, 0.52)), ("vanCreamY", (0.91, 0.79, 0.37)),
-                       ("bagCoral", (0.89, 0.35, 0.35)), ("coolerBlue", (0.27, 0.56, 0.87))]:
+                       ("bagCoral", (0.89, 0.35, 0.35)), ("coolerBlue", (0.27, 0.56, 0.87)),
+                       # 露營者（同樣是 sRGB 反推的線性值）：膚色 #F5CBA7、芥末黃 #E8B04B、梅紫 #9B5B8A、卡其 #C9B37E、橄欖 #6B7A45
+                       ("skin", (0.91, 0.60, 0.39)), ("eyeDark", (0.02, 0.015, 0.012)), ("blush", (0.90, 0.33, 0.33)),
+                       ("puffMustard", (0.81, 0.43, 0.07)), ("fleecePlum", (0.33, 0.10, 0.25)),
+                       ("pantsNavy", (0.04, 0.07, 0.15)), ("pantsKhaki", (0.58, 0.45, 0.21)), ("boots", (0.12, 0.07, 0.04)),
+                       ("beanieRed", (0.75, 0.12, 0.10)), ("hairDark", (0.045, 0.025, 0.017)), ("hairBrown", (0.10, 0.045, 0.025)),
+                       ("hatOlive", (0.15, 0.19, 0.06)), ("mitten", (0.35, 0.22, 0.14)), ("toast", (0.50, 0.24, 0.08)),
+                       ("copper", (0.72, 0.36, 0.20)), ("dripperTerra", (0.55, 0.20, 0.10)), ("coffee", (0.05, 0.03, 0.02))]:
             _P[n] = T._mat(n, rgb)
         _P["lanternGlow"] = _emat("lanternGlow", (1.0, 0.82, 0.45), 3.0)
         _P["flameOrange"] = _emat("flameOrange", (1.0, 0.45, 0.12), 4.0)
@@ -168,6 +175,24 @@ class B:
             f[self.li] = -1
             f[self.lk] = -1
         return res["faces"], hole_face
+
+    def rings(self, rings3d, cap_start=False, cap_end=False, pole=None):
+        """一串同點數的 3D 環連成面（球冠、帽子）。pole 給了就從最後一環收到一個頂點。"""
+        R = [[self.bm.verts.new(Vector(p)) for p in ring] for ring in rings3d]
+        for i in range(len(R) - 1):
+            A, C = R[i], R[i + 1]
+            n = len(A)
+            for k in range(n):
+                self.bm.faces.new((A[k], A[(k + 1) % n], C[(k + 1) % n], C[k]))
+        if cap_start:
+            self.bm.faces.new(R[0][::-1])
+        if pole is not None:
+            pv = self.bm.verts.new(Vector(pole))
+            last = R[-1]
+            for k in range(len(last)):
+                self.bm.faces.new((last[k], last[(k + 1) % len(last)], pv))
+        elif cap_end:
+            self.bm.faces.new(R[-1])
 
     def done(self, name):
         bmesh.ops.recalc_face_normals(self.bm, faces=self.bm.faces)
@@ -1309,4 +1334,241 @@ def cooler(name):
     b.use(m["white"])
     b.box((0, 0, 0.5), (0.22, 0.05, 0.04))
     b.use(m["chrome"])
+    return b.done(name)
+
+
+# ---------------------------------------------------------------- Q 版露營者（多零件、有關節；Godot 端做程式動畫）
+# 角色 = 幾個各自有原點（關節）的零件掛成階層：body（根）→ head / arms / kettle…，Godot 端旋轉節點就是動畫。
+# 座標：+X 朝前（臉的方向）、Z 上；原點在腳底（坐姿版：椅子所在的地面）。單位公尺，約 2.9 頭身。
+# 零件名稱 = <角色名>_<零件>，Godot 端用 find_child("*_head") 之類找。
+
+def _part(b, name, pivot, parent=None, parent_pivot=(0, 0, 0)):
+    """B 建好的零件 → 物件；原點搬到 pivot（關節），掛到 parent 下。"""
+    ob = b.done(name)
+    ob.data.transform(Matrix.Translation(-Vector(pivot)))
+    ob.location = Vector(pivot) - Vector(parent_pivot)
+    if parent is not None:
+        ob.parent = parent
+    return ob
+
+
+def _empty(name, at, parent, parent_pivot):
+    """空物件當標記點（壺嘴出口），Godot 端拿它的 global_position。"""
+    import bpy
+    ob = bpy.data.objects.new(name, None)
+    bpy.context.collection.objects.link(ob)
+    ob.location = Vector(at) - Vector(parent_pivot)
+    ob.parent = parent
+    return ob
+
+
+def _dome(b, c, r, phi0, scale=(1, 1, 1), n=6, k=24):
+    """球冠（帽子、頭髮）：從緯度 phi0（度）到頂點；底部封口成封閉體，法線才會一致朝外。"""
+    c = Vector(c)
+    rings = []
+    for i in range(n):
+        ph = math.radians(phi0 + (80 - phi0) * i / (n - 1))
+        rings.append([c + Vector((r * math.cos(ph) * math.cos(a) * scale[0], r * math.cos(ph) * math.sin(a) * scale[1],
+                                  r * math.sin(ph) * scale[2])) for a in [j * 2 * math.pi / k for j in range(k)]])
+    b.rings(rings, cap_start=True, pole=c + Vector((0, 0, r * scale[2])))
+
+
+def _camper_head(zh, m, style):
+    """大頭：膚色球 + 黑眼珠（帶亮點）+ 腮紅 + 小嘴；style = beanie（毛帽）或 bucket（漁夫帽）。"""
+    R = 0.215
+    c = Vector((0.03, 0, zh + 0.60))
+    b = B()
+    b.sphere(c, R, sub=3, scale=(1.0, 1.02, 0.95))
+    b.use(m["skin"], smooth=True)
+    for s in (-1, 1):
+        a = math.radians(s * 24)
+        b.sphere(c + Vector((R * 0.96 * math.cos(a), R * 0.98 * math.sin(a), -0.005)), 0.03, sub=2, scale=(0.45, 1.0, 1.35))
+    b.use(m["eyeDark"], smooth=True)
+    for s in (-1, 1):
+        a = math.radians(s * 22)
+        b.sphere(c + Vector((R * math.cos(a) + 0.006, R * 0.98 * math.sin(a) + s * 0.008, 0.012)), 0.009, sub=1)
+    b.use(m["white"], smooth=True)
+    for s in (-1, 1):
+        a = math.radians(s * 40)
+        b.sphere(c + Vector((R * 0.97 * math.cos(a), R * 0.99 * math.sin(a), -0.05)), 0.034, sub=2, scale=(0.3, 1.0, 0.65))
+    b.use(m["blush"], smooth=True)
+    b.sphere(c + Vector((R * 0.97, 0, -0.085)), 0.012, sub=1, scale=(0.4, 1.5, 0.7))
+    b.use(m["eyeDark"], smooth=True)
+    hc = c + Vector((-0.01, 0, 0))
+    if style == "beanie":
+        _dome(b, hc, R + 0.008, 12, scale=(1, 1.02, 1.0))          # 帽子下露出一圈頭髮
+        b.use(m["hairDark"], smooth=True)
+        rb = R + 0.03
+        _dome(b, hc, rb, 22, scale=(1, 1.02, 1.15))               # 略高的軟帽身
+        b.use(m["beanieRed"], smooth=True)
+        zb = rb * 1.15 * math.sin(math.radians(22))
+        b.torus(hc + Vector((0, 0, zb)), rb * math.cos(math.radians(22)), 0.036, axis='Z')   # 反摺帽緣
+        b.sphere(hc + Vector((0, 0, rb * 1.15 + 0.02)), 0.058, sub=2)                        # 毛球
+        b.use(m["vanCream"], smooth=True)
+    else:
+        _dome(b, hc, R + 0.012, 14, scale=(1, 1.02, 1.0))          # 西瓜皮
+        b.use(m["hairBrown"], smooth=True)
+        b.cyl(c + Vector((0, 0, 0.18)), 0.215, 0.13, segs=20, r2=0.185)     # 帽身
+        b.cyl(c + Vector((0, 0, 0.115)), 0.31, 0.05, segs=20, r2=0.235)     # 下垂帽簷
+        b.use(m["hatOlive"], smooth=True)
+    return b
+
+
+def _camper_body(zh, m, jacket, pants, sitting):
+    """身體 = 三顆壓扁的球疊成羽絨外套 + 圍巾；坐姿：大腿往前、小腿垂下（腳碰不到地，像小孩坐大椅子）。"""
+    b = B()
+    for z, r in ((0.07, 0.19), (0.18, 0.185), (0.29, 0.165)):
+        b.sphere((0, 0, zh + z), r, sub=3, scale=(0.85, 1.0, 0.62))
+    b.use(m[jacket], smooth=True)
+    b.torus((0.01, 0, zh + 0.375), 0.10, 0.045, axis='Z')
+    b.use(m["vanCream"], smooth=True)
+    if sitting:
+        for s in (-1, 1):
+            b.rod((0.02, s * 0.085, zh + 0.02), (0.25, s * 0.10, zh + 0.01), 0.07, segs=10)
+            b.rod((0.25, s * 0.10, zh + 0.01), (0.27, s * 0.10, zh - 0.30), 0.06, segs=10)
+        b.use(m[pants], smooth=True)
+        for s in (-1, 1):
+            b.sphere((0.31, s * 0.10, zh - 0.34), 0.085, sub=2, scale=(1.25, 0.85, 0.75))
+    else:
+        for s in (-1, 1):
+            b.rod((0.0, s * 0.085, zh), (0.01, s * 0.09, zh - 0.20), 0.07, segs=10)
+            b.rod((0.01, s * 0.09, zh - 0.20), (0.02, s * 0.09, zh - 0.38), 0.06, segs=10)
+        b.use(m[pants], smooth=True)
+        for s in (-1, 1):
+            b.sphere((0.06, s * 0.09, zh - 0.41), 0.085, sub=2, scale=(1.3, 0.85, 0.75))
+    b.use(m["boots"], smooth=True)
+    return b
+
+
+def _arms_roast(zh, m, jacket):
+    """兩手一起握著烤棉花糖的長棍；整組以肩線為軸（Godot 端慢慢上下左右晃）。"""
+    b = B()
+    sh = zh + 0.30
+    b.rod((0.03, -0.17, sh), (0.34, -0.045, zh + 0.20), 0.055, segs=10)
+    b.rod((0.03, 0.17, sh), (0.19, 0.03, zh + 0.22), 0.055, segs=10)
+    b.use(m[jacket], smooth=True)
+    b.sphere((0.34, -0.045, zh + 0.20), 0.065, sub=2)
+    b.sphere((0.19, 0.03, zh + 0.22), 0.065, sub=2)
+    b.use(m["mitten"], smooth=True)
+    b.rod((0.14, -0.02, zh + 0.225), (1.25, -0.03, zh + 0.10), 0.011, segs=8)
+    b.use(m["woodPole"], smooth=True)
+    b.sphere((1.27, -0.03, zh + 0.10), 0.065, sub=2, scale=(1.15, 1.0, 1.0))
+    b.use(m["white"], smooth=True)
+    b.sphere((1.30, -0.03, zh + 0.085), 0.045, sub=2, scale=(1.1, 1.0, 1.0))   # 烤焦的那一面
+    b.use(m["toast"], smooth=True)
+    return b, (0.03, 0, sh)
+
+
+def _arm_kettle(zh, m, jacket):
+    """右手舉著鵝頸手沖壺。回傳 (手臂 B, 肩點), (壺 B, 手點=壺的關節), 壺嘴出口。"""
+    sh = (0.03, -0.17, zh + 0.30)
+    hand = Vector((0.36, -0.14, zh + 0.36))
+    b = B()
+    b.rod(sh, hand, 0.055, segs=10)
+    b.use(m[jacket], smooth=True)
+    b.sphere(hand, 0.065, sub=2)
+    b.use(m["mitten"], smooth=True)
+    k = B()
+    kc = hand + Vector((0, 0, -0.14))
+    k.sphere(kc, 0.085, sub=3, scale=(1, 1, 0.8))
+    k.cyl(kc + Vector((0, 0, 0.068)), 0.05, 0.02, segs=12)
+    pts = [kc + Vector(p) for p in ((0.07, 0, 0.0), (0.14, 0, 0.05), (0.19, 0, 0.11), (0.24, 0, 0.12), (0.28, 0, 0.08))]
+    for i in range(len(pts) - 1):
+        k.rod(pts[i], pts[i + 1], 0.013 - 0.0015 * i, segs=8)
+    k.use(m["copper"], smooth=True)
+    k.sphere(kc + Vector((0, 0, 0.09)), 0.016, sub=1)
+    hp = [kc + Vector(p) for p in ((-0.07, 0, 0.04), (-0.05, 0, 0.11), (-0.02, 0, 0.14), (0.02, 0, 0.14), (0.05, 0, 0.11), (0.07, 0, 0.04))]
+    for i in range(len(hp) - 1):
+        k.rod(hp[i], hp[i + 1], 0.012, segs=8)
+    k.use(m["darkMetal"], smooth=True)
+    return (b, sh), (k, tuple(hand)), tuple(pts[-1])
+
+
+def _arm_mug(zh, m, jacket):
+    """左手端著自己的那杯。"""
+    sh = (0.03, 0.17, zh + 0.30)
+    hand = (0.24, 0.13, zh + 0.22)
+    b = B()
+    b.rod(sh, hand, 0.055, segs=10)
+    b.use(m[jacket], smooth=True)
+    b.sphere(hand, 0.065, sub=2)
+    b.use(m["mitten"], smooth=True)
+    mc = Vector((0.28, 0.10, zh + 0.20))
+    b.cyl(mc, 0.05, 0.10, segs=14)
+    b.use(m["vanCream"], smooth=True)
+    b.cyl(mc + Vector((0, 0, 0.02)), 0.051, 0.03, segs=14)
+    b.use(m["coolerBlue"], smooth=True)
+    b.cyl(mc + Vector((0, 0, 0.045)), 0.042, 0.012, segs=14)
+    b.use(m["coffee"], smooth=True)
+    return b, sh
+
+
+def _pour(m, tip, length=0.3):
+    """壺嘴倒出來的水柱：從 tip 往下 length 的細棒，Godot 端跟著壺嘴移動並縮放到濾杯口。"""
+    b = B()
+    b.rod(tip, (tip[0], tip[1], tip[2] - length), 0.006, segs=6)
+    b.use(m["glass"], smooth=True)
+    return b
+
+
+def camper_roast(name):
+    """坐在露營椅上烤棉花糖的露營者（毛帽、芥末黃羽絨外套）。零件：body（根）、head、arms。"""
+    m = pm()
+    zh = 0.525   # 髖關節高度 = 椅面 0.455 + 大腿半徑
+    body = _part(_camper_body(zh, m, "puffMustard", "pantsNavy", True), name, (0, 0, 0))
+    _part(_camper_head(zh, m, "beanie"), name + "_head", (0.02, 0, zh + 0.40), body)
+    ab, piv = _arms_roast(zh, m, "puffMustard")
+    _part(ab, name + "_arms", piv, body)
+    return body
+
+
+def camper_brew(name):
+    """站著手沖咖啡的露營者（漁夫帽、梅紫色刷毛外套）。零件：body（根）、head、arm_r → kettle → tip（空物件）、arm_l、pour。"""
+    m = pm()
+    zh = 0.47
+    body = _part(_camper_body(zh, m, "fleecePlum", "pantsKhaki", False), name, (0, 0, 0))
+    _part(_camper_head(zh, m, "bucket"), name + "_head", (0.02, 0, zh + 0.40), body)
+    (ab, sh), (kb, hand), tip = _arm_kettle(zh, m, "fleecePlum")
+    arm = _part(ab, name + "_arm_r", sh, body)
+    kettle = _part(kb, name + "_kettle", hand, arm, sh)
+    _empty(name + "_tip", tip, kettle, hand)
+    lb, sh2 = _arm_mug(zh, m, "fleecePlum")
+    _part(lb, name + "_arm_l", sh2, body)
+    _part(_pour(m, tip), name + "_pour", tip, body)
+    return body
+
+
+def coffee_set(name):
+    """桌上的手沖組：濾杯架在馬克杯上（原點），旁邊一杯已經沖好的（Godot 端在這杯上放蒸氣）。"""
+    m = pm()
+    b = B()
+    for mc in (Vector((0, 0, 0)), Vector((-0.11, 0.10, 0))):
+        b.cyl(mc + Vector((0, 0, 0.055)), 0.055, 0.11, segs=16)
+    b.use(m["vanCream"], smooth=True)
+    for mc in (Vector((0, 0, 0)), Vector((-0.11, 0.10, 0))):
+        b.cyl(mc + Vector((0, 0, 0.03)), 0.056, 0.035, segs=16)
+        b.torus(mc + Vector((0.075, 0, 0.055)), 0.03, 0.009, axis='Y', seg_major=12, seg_minor=6)   # 杯耳
+    b.use(m["coolerBlue"], smooth=True)
+    b.cyl((0, 0, 0.116), 0.07, 0.012, segs=16)              # 濾杯座
+    b.cyl((0, 0, 0.167), 0.045, 0.09, segs=16, r2=0.085)     # 濾杯
+    b.use(m["dripperTerra"], smooth=True)
+    b.cyl((0, 0, 0.19), 0.072, 0.006, segs=16)               # 濕咖啡粉
+    b.cyl((-0.11, 0.10, 0.10), 0.046, 0.008, segs=16)        # 沖好的咖啡
+    b.use(m["coffee"], smooth=True)
+    return b.done(name)
+
+
+def marshmallow_bag(name):
+    """椅子旁的棉花糖袋 + 兩顆掉出來的。"""
+    m = pm()
+    b = B()
+    # 枕頭形的袋子（斜靠著）、上緣一條封口、正面一塊粉紅標籤
+    b.sphere((0, 0, 0.11), 0.12, sub=3, scale=(0.45, 0.75, 1.0))
+    b.use(m["white"], smooth=True)
+    b.box((0.05, 0, 0.11), (0.025, 0.11, 0.08))
+    b.box((0, 0, 0.225), (0.03, 0.15, 0.02))
+    b.use(m["bagCoral"])
+    b.cyl((0.14, 0.12, 0.028), 0.028, 0.055, segs=10, axis='X')
+    b.cyl((0.19, -0.06, 0.028), 0.028, 0.055, segs=10, axis='Y')
+    b.use(m["white"], smooth=True)
     return b.done(name)
