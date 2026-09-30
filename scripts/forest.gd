@@ -189,20 +189,83 @@ void fragment() {
 
 const WATER_SHADER := """
 shader_type spatial;
-render_mode blend_mix, cull_disabled;
-uniform vec4 tint : source_color = vec4(0.30, 0.62, 0.80, 0.72);
+render_mode blend_mix, depth_draw_never, cull_disabled, specular_schlick_ggx;
+// 水面 = 折射後的水底（螢幕貼圖）依水深混到深水色 + 岸邊水線；表面不吃漫射光（ALBEDO=0，樹影不會印在水上），
+// 只留鏡面反射：法線用幾組波浪擾動，太陽反光碎成閃點、反射探針裡的樹在水面上晃。
+uniform vec3 shallow_tint : source_color = vec3(0.55, 0.92, 0.85);
+uniform vec3 deep_color : source_color = vec3(0.04, 0.34, 0.52);
+uniform vec3 sky_tint : source_color = vec3(0.60, 0.78, 0.95);
+uniform vec3 foam_color : source_color = vec3(0.92, 0.97, 0.95);
+uniform float light_scale = 1.0;      // 日夜：深水色、天空色與水線要跟著環境變暗（折射到的水底本來就是亮度正確的畫面）
+uniform float depth_fade = 1.0;       // 每公尺變深的速度
+uniform float refract_strength = 0.03;
+uniform float normal_strength = 0.6;
+uniform sampler2D SCREEN_TEXTURE : hint_screen_texture, filter_linear_mipmap;
+uniform sampler2D DEPTH_TEXTURE : hint_depth_texture, filter_linear_mipmap;
 varying vec3 wpos;
-void vertex() {
-	VERTEX.y += sin(VERTEX.x * 2.0 + TIME * 1.2) * 0.02 + cos(VERTEX.z * 1.7 + TIME) * 0.02;
-	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+
+float linear_depth(vec2 uv, mat4 inv_proj) {
+	float d = texture(DEPTH_TEXTURE, uv).r;
+	vec4 v = inv_proj * vec4(uv * 2.0 - 1.0, d, 1.0);
+	return -v.z / v.w;
 }
+
+// 漣漪用三層往不同方向流的 value noise（正弦波疊起來會變成一格一格的亮點陣列，噪音才沒有週期）
+float hash(vec2 p) {
+	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float vnoise(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+float ripples(vec2 p, float t) {
+	return vnoise(p * 1.6 + vec2(t * 0.25, t * 0.18)) * 0.6
+		+ vnoise(p * 3.7 - vec2(t * 0.32, -t * 0.21)) * 0.3
+		+ vnoise(p * 7.0 + vec2(-t * 0.5, t * 0.4)) * 0.1;
+}
+
+void vertex() {
+	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	VERTEX.y += 0.012 * sin(wpos.x * 1.5 + TIME * 0.8) + 0.010 * sin(wpos.z * 1.9 - TIME * 0.6 + wpos.x * 0.4);
+}
+
 void fragment() {
-	float r = sin(wpos.x * 2.2 + TIME * 0.9) * 0.5 + sin(wpos.z * 1.8 - TIME * 0.7 + wpos.x * 0.6) * 0.5;
-	float fr = pow(1.0 - clamp(dot(NORMAL, VIEW), 0.0, 1.0), 3.0);
-	ALBEDO = tint.rgb + r * 0.025;
-	ALPHA = mix(tint.a, 0.92, fr);
-	ROUGHNESS = 0.08;
-	SPECULAR = 0.6;
+	vec2 p = wpos.xz;
+	float e = 0.05;
+	float hx = ripples(p + vec2(e, 0.0), TIME) - ripples(p - vec2(e, 0.0), TIME);
+	float hz = ripples(p + vec2(0.0, e), TIME) - ripples(p - vec2(0.0, e), TIME);
+	vec3 n_v = normalize((VIEW_MATRIX * vec4(normalize(vec3(-hx * normal_strength, 1.0, -hz * normal_strength)), 0.0)).xyz);
+	NORMAL = n_v;
+	// 水深 = 這個像素後面的場景深度 − 水面深度
+	float surf_d = -VERTEX.z;
+	float scene_d = linear_depth(SCREEN_UV, INV_PROJECTION_MATRIX);
+	float depth = max(scene_d - surf_d, 0.0);
+	// 折射：用法線擾動螢幕座標；淺水少扭一點，扭到水面上方的東西就退回不扭
+	vec2 uv = SCREEN_UV + n_v.xy * refract_strength * clamp(depth, 0.0, 1.0);
+	float d2 = linear_depth(uv, INV_PROJECTION_MATRIX);
+	if (d2 < surf_d) {
+		uv = SCREEN_UV;
+		d2 = scene_d;
+	}
+	vec3 bg = texture(SCREEN_TEXTURE, uv).rgb;
+	float fade = 1.0 - exp(-max(d2 - surf_d, 0.0) * depth_fade);
+	vec3 col = mix(bg * shallow_tint, deep_color * light_scale, fade);
+	float fr = pow(1.0 - clamp(dot(n_v, VIEW), 0.0, 1.0), 4.0);
+	col = mix(col, sky_tint * light_scale, 0.12 + 0.45 * fr);   // 天空色：正看一點點、斜看多
+	// 岸邊與物件接觸處：一條細細、被漣漪打斷的水線
+	float edge = 1.0 - smoothstep(0.0, 0.16, depth);
+	float rp = ripples(p * 2.0, TIME * 1.5);
+	float foam = smoothstep(0.55, 0.8, edge * (0.55 + 0.6 * rp));
+	col = mix(col, foam_color * light_scale, foam * 0.7);
+	EMISSION = col;
+	ALBEDO = vec3(0.0);
+	ALPHA = 1.0;
+	ROUGHNESS = 0.22;
+	SPECULAR = 0.4;
 }
 """
 
@@ -267,7 +330,7 @@ const TOD_PRESETS := {
 		"sun_rot": Vector3(-44, 32, 0), "sun_c": Color(1.0, 0.95, 0.85), "sun_e": 1.3, "sun_body": 0.0,
 		"head": 0.0, "cabin": 1.0, "fire": 1.6, "fire_r": 4.5, "lantern": 0.0, "tent": 0.0, "bulbs": 0.5,
 		"ff": 0.0, "head_glow": 0.0, "tail_glow": 0.0,
-		"a_wind": 0.7, "a_birds": 1.0, "a_crickets": 0.0, "a_fire": 0.8, "a_water": 0.6,
+		"a_wind": 0.7, "a_birds": 1.0, "a_crickets": 0.0, "a_fire": 0.8, "a_water": 0.6, "water_l": 1.0,
 	},
 	TimeOfDay.DUSK: {
 		"sky_top": Color(0.30, 0.34, 0.62), "sky_h": Color(1.0, 0.72, 0.46), "gnd_h": Color(0.78, 0.58, 0.48), "gnd_b": Color(0.30, 0.26, 0.30),
@@ -277,7 +340,7 @@ const TOD_PRESETS := {
 		"sun_rot": Vector3(-18, 62, 0), "sun_c": Color(1.0, 0.74, 0.44), "sun_e": 1.7, "sun_body": 0.0,
 		"head": 3.0, "cabin": 1.6, "fire": 3.0, "fire_r": 5.5, "lantern": 1.4, "tent": 1.0, "bulbs": 2.2,
 		"ff": 1.2, "head_glow": 2.0, "tail_glow": 1.2,
-		"a_wind": 0.5, "a_birds": 0.35, "a_crickets": 0.7, "a_fire": 1.0, "a_water": 0.6,
+		"a_wind": 0.5, "a_birds": 0.35, "a_crickets": 0.7, "a_fire": 1.0, "a_water": 0.6, "water_l": 0.55,
 	},
 	TimeOfDay.NIGHT: {
 		"sky_top": Color(0.02, 0.03, 0.09), "sky_h": Color(0.09, 0.11, 0.22), "gnd_h": Color(0.06, 0.07, 0.12), "gnd_b": Color(0.02, 0.02, 0.04),
@@ -287,7 +350,7 @@ const TOD_PRESETS := {
 		"sun_rot": Vector3(-52, 140, 0), "sun_c": Color(0.55, 0.65, 0.95), "sun_e": 0.42, "sun_body": 1.0,   # 1 = 月亮
 		"head": 6.0, "cabin": 3.0, "fire": 4.5, "fire_r": 7.0, "lantern": 2.5, "tent": 2.0, "bulbs": 3.0,
 		"ff": 2.5, "head_glow": 3.5, "tail_glow": 2.0,
-		"a_wind": 0.35, "a_birds": 0.0, "a_crickets": 1.0, "a_fire": 1.0, "a_water": 0.5,
+		"a_wind": 0.35, "a_birds": 0.0, "a_crickets": 1.0, "a_fire": 1.0, "a_water": 0.5, "water_l": 0.10,
 	},
 }
 var sun: DirectionalLight3D
@@ -299,6 +362,7 @@ var lantern_light: OmniLight3D
 var tent_light: OmniLight3D
 var headlights: Array[SpotLight3D] = []
 var dust_mat: StandardMaterial3D
+var water_mat: ShaderMaterial
 var night_mats := {}   # 材質名 → [StandardMaterial3D]，夜晚要開自發光的（車燈罩、尾燈）
 const NIGHT_MATS := ["headlightGlass", "tailRed"]
 var bench_t := 0.0
@@ -610,6 +674,7 @@ func _build_water() -> void:
 	sh.code = WATER_SHADER
 	var m := ShaderMaterial.new()
 	m.shader = sh
+	water_mat = m
 	var mi := MeshInstance3D.new()
 	mi.name = "Water"
 	mi.mesh = pm
@@ -617,6 +682,16 @@ func _build_water() -> void:
 	mi.position = Vector3(POND.x, WATER_Y, POND.y)
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
+	# 池塘上方一顆反射探針：水面映出岸邊的樹與天空，而不是一片死藍
+	var probe := ReflectionProbe.new()
+	probe.update_mode = ReflectionProbe.UPDATE_ONCE
+	probe.size = Vector3(26, 12, 26)
+	probe.position = Vector3(POND.x, WATER_Y + 4.0, POND.y)
+	probe.box_projection = true
+	probe.intensity = 0.9
+	probe.ambient_mode = ReflectionProbe.AMBIENT_DISABLED
+	probe.max_distance = 60.0
+	add_child(probe)
 
 
 # ---------------------------------------------------------------- grass
@@ -998,7 +1073,7 @@ func _build_props() -> void:
 		var ang := k * TAU / 7.0 + 0.4
 		var rr := rng.randf_range(1.5, 3.4)
 		place_one("lily_large" if k % 2 == 0 else "lily_small", POND.x + cos(ang) * rr, POND.y + sin(ang) * rr,
-				2.2, rng.randf() * TAU, 0.0, WATER_Y + 0.02)
+				2.2, rng.randf() * TAU, 0.0, WATER_Y + 0.05)
 	for k in 10:
 		var ang := k * TAU / 10.0
 		var rr := 5.6 + rng.randf_range(-0.4, 0.5)
@@ -1496,6 +1571,7 @@ func _apply_state(st: Dictionary) -> void:
 	dust_mat.emission_enabled = ff > 0.02
 	dust_mat.emission = Color(0.6, 1.0, 0.3)
 	dust_mat.emission_energy_multiplier = ff
+	water_mat.set_shader_parameter("light_scale", st["water_l"])
 	# 環境音：a_* 是線性音量（0–1），配上每一層的基準 dB；靜音或 0 就壓到 -80 dB
 	for nm: String in amb:
 		var v: float = st.get("a_" + nm, 0.0)

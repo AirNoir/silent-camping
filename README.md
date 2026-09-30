@@ -33,10 +33,16 @@
 - **環境音**（`tools/gen_audio.py`，純 numpy 合成、不用任何素材）：風、鳥、蟋蟀＋貓頭鷹是不定位的環境層，
   營火與池塘是 3D 音源（鏡頭推近營地火聲變大）；五層音量跟著日／黃昏／夜一起漸變（`TOD_PRESETS` 的 `a_*`），**M** 靜音
 
+- **池塘水面**（`WATER_SHADER`）：用螢幕深度算水深——淺灘透出折射過的沙底、深處轉深藍；岸邊與獨木舟、睡蓮接觸處一條會動的細水線；
+  三層流動的 value noise 當漣漪法線，太陽反光碎成閃點、反射探針裡的樹在水面上晃；水面不吃漫射光（樹影不會印在水上），
+  亮度跟著日夜漸變
+
 ![preview](preview_diorama.png)
 ![camp](preview_diorama_camp.png)
 ![campers](preview_campers.png)
 ![campers night](preview_campers_night.png)
+![pond](preview_pond.png)
+![water before/after](preview_water_before_after.png)
 ![aerial](preview_diorama_aerial.png)
 ![van](preview_diorama_van.png)
 ![van side](preview_diorama_van_side.png)
@@ -217,3 +223,10 @@ Godot --path . --write-movie /tmp/shot/f.png --fixed-fps 30 --quit-after 45 -- -
 - `_style_mesh()` 裡 `PROP_MATS` 的 `specular` 一直沒生效：套完之後有一行無條件的 `metallic_specular = 0.5` 把它蓋掉了
   （玻璃寫 0.15 其實一直是 0.5）。改成 else 分支。
 - Godot 4 只吃 WAV／OGG Vorbis／MP3，ffmpeg 內建的 `vorbis` 編碼器要加 `-strict -2` 而且**只支援雙聲道**——單聲道的營火也要輸出成立體聲。
+- **水面看起來像一片淺藍塑膠板**：原本是半透明單色平面，淺灘深潭同色、岸邊沒有水線、太陽反光是一整團白斑，
+  樹影直接印在水上像地板。改成：用 `DEPTH_TEXTURE` 算每個像素的水深，淺處透出折射過的沙底（`SCREEN_TEXTURE`，
+  折射到水面上方的東西就退回不扭）、深處轉深藍；水深 <16 cm 的地方畫一條被漣漪打斷的細水線（岸邊、獨木舟、睡蓮周圍都會有）；
+  `ALBEDO = 0`、顏色走 `EMISSION`——水面不吃漫射光，樹影就不會印上去，只留鏡面反射；深水色與水線乘 `light_scale` 跟著日夜變暗。
+  第一版漣漪法線用五組正弦波疊加，太陽反光排成一格一格整齊的亮點陣列（兩組相近波長、接近垂直的波就是一個晶格）；
+  換成三層往不同方向流的 value noise 才像水。池塘上方另放一顆 `ReflectionProbe`，斜看時水面映出岸邊的樹。
+  見 `preview_water_before_after.png`。
