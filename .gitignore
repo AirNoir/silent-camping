@@ -1,0 +1,9 @@
+# Godot import cache
+.godot/
+# 渲染時暫時蓋掉專案設定用
+override.cfg
+# 影片：AVI 中間檔、log，以及 72 MB 的 mp4 都不進 git（README 有重新輸出的指令）
+video/*.avi
+video/*.mp4
+video/render.log
+.DS_Store
