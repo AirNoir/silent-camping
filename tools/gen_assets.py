@@ -71,7 +71,7 @@ objs = [
     G(P.camp_table, "camp_table"), G(P.lantern, "lantern"), G(P.campfire, "campfire"), G(P.tripod_kettle, "tripod_kettle"),
     G(P.crate, "crate_A"), G(P.crate, "crate_B", (0.42, 0.42, 0.5)), G(P.cooler, "cooler"),
     # 露營者（多零件階層，整組匯成一個 GLB）與他們的小東西
-    G(P.camper_roast, "camper_roast"), G(P.camper_brew, "camper_brew"),
+    G(P.camper_roast, "camper_roast"), G(P.camper_brew, "camper_brew"), G(P.camper_walk, "camper_walk"),
     G(P.coffee_set, "coffee_set"), G(P.marshmallow_bag, "marshmallow_bag"),
 ]
 for ob in objs:

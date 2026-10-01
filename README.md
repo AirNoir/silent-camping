@@ -43,6 +43,23 @@
 ![campers night](preview_campers_night.png)
 ![pond](preview_pond.png)
 ![water before/after](preview_water_before_after.png)
+
+## 散步模式（實驗）
+按 **P**：鏡頭從環繞視角俯衝下來，變成跟著一個 Q 版露營者（`assets/gen/camper_walk.glb`，`scripts/walker.gd`）的第三人稱視角，
+WASD／方向鍵相對鏡頭方向走、Shift 跑、拖曳轉鏡頭、滾輪拉遠近，再按 P 回到環繞視角（原本的角度與距離會還原）。
+這是用來回答「這個專案要當擺件還是可以走進去的世界」的實驗：走十分鐘，答案自己會出來。
+
+![walk](preview_walk.png)
+
+- 高度直接跟地形函式 `h()`（不靠物理地板，所以和地面網格完全貼合）；走進池塘會涉水到小腿，水線會自動繞著腳
+- `move_and_slide` 只處理水平碰撞：`_build_colliders()` 只放「走過去會穿幫」的大東西——樹幹（6 m 高的圓柱）、
+  露營車、帳篷、桌椅、營火、木箱、大石、告示牌；灌木花草直接穿過
+- 腿、手臂、頭是 GLB 裡原點在關節上的節點，走路循環是程式算的：腿臂反相擺、速度越快擺幅越大、跑步前傾、停下來有 `gait` 平滑收尾
+- 第三人稱鏡頭的遮擋，三層：對樹幹／道具射線擋到就縮短距離（最近到 0.9 m，快變第一人稱）、不鑽進地形；
+  **樹葉沿「鏡頭→角色」這條線段用抖動淡出**（`LEAF_SHADER` 的 `cam_pos / cam_target / cam_fade`，用世界座標算距離，陰影 pass 不受影響）；
+  擠到鏡頭前 1.8 m 內的樹幹、1.1 m 內的角色自己用 `StandardMaterial3D` 的 distance fade（pixel dither）淡出
+- 散步時景深放寬（遠處 30 m 才開始糊），不然前方森林是一片霧
+- headless 測試：`Godot --headless --path . --script res://tests/walk_test.gd`（地形貼合、撞車擋得住、涉水、離開模式還原鏡頭）
 ![aerial](preview_diorama_aerial.png)
 ![van](preview_diorama_van.png)
 ![van side](preview_diorama_van_side.png)
@@ -141,7 +158,7 @@ ffmpeg -i video/demo.avi -vf "fps=30,format=yuv420p" -c:v libx264 -crf 17 -c:a a
 
 ## 執行
 - 用 Godot 開這個資料夾，按 **F5**；或命令列 `Godot --path .`
-- 操作：**滑鼠拖曳**環繞、**滾輪**縮放；放著不動 4 秒會緩慢自轉；**N** 日／黃昏／夜、**A** 自動循環、**M** 靜音
+- 操作：**滑鼠拖曳**環繞、**滾輪**縮放；放著不動 4 秒會緩慢自轉；**N** 日／黃昏／夜、**A** 自動循環、**M** 靜音、**P** 散步模式
 
 ## 檔案
 - `forest.tscn` + `scripts/forest.gd` — Diorama 場景（主場景）
@@ -150,6 +167,9 @@ ffmpeg -i video/demo.avi -vf "fps=30,format=yuv420p" -c:v libx264 -crf 17 -c:a a
   - `_build_props()` 營地／池塘擺設、`_setup_env()` 光線與背景、`_build_camera()` 環繞鏡頭與景深
   - `_build_campers()` 兩個露營者（`place_scene()` 保留 GLB 節點階層）、`_campers_tick()` 程式動畫、`_steam()` 蒸氣粒子
   - `_build_audio()` 環境音（`audio/*.ogg`，循環）、`_style_mesh()` 材質替換（`kenney_mesh` 與 `place_scene` 共用）
+  - `_build_colliders()` 散步碰撞、`toggle_walk() / _enter_walk() / _exit_walk()` 散步模式、`_apply_camera()` 第三人稱鏡頭遮擋
+- `scripts/walker.gd` — 散步模式的角色控制與程式走路循環
+- `tests/walk_test.gd` — 散步模式的 headless 測試
   - `PALETTE` — 材質名稱 → 森林配色（改這裡就能換整體色調）
   - `kenney_mesh(name)`：名稱含 `/` 就從 `res://assets/<name>.glb` 載入（例 `gen/tree_round_A`），否則從 Kenney 資料夾
 - `tools/` — Blender 資產生成腳本（見上）；`tools/gen_audio.py` 環境音合成
@@ -162,6 +182,7 @@ ffmpeg -i video/demo.avi -vf "fps=30,format=yuv420p" -c:v libx264 -crf 17 -c:a a
 - `--orbit=yaw,pitch,dist` 固定環繞鏡頭角度（例：`--orbit=38,-33,72`）
 - `--cam=x,y,z,tx,ty,tz[,fov]` 任意相機位置看向目標（fov 預設 28）；`--cam-rel=…` 同上但 y 相對地面高度
 - `--demo=<秒>` 展示影片運鏡（見上）
+- `--walk` 直接進散步模式；`--walk-auto=x,z[,run]` 固定輸入（截圖／測試用，x 右 z 後、第三個值 1 = 跑）；`--walk-debug` 印鏡頭遮擋診斷
 - `--dusk` 黃昏、`--night` 夜晚（瞬間）；`--auto` 自動循環；`--mute` 靜音；`--to=dusk|night` 啟動後開始 30 秒漸變，`--tod-seek=<秒>` 直接跳到漸變第幾秒（截圖用），`--tod-debug` 每秒印進度
 - `--no-dof` / `--no-glow` / `--flat`（關 SSAO/SSIL）/ `--no-shadow` / `--no-water`
 - `--bench`（量 fps）/ `--tree-dir=gen`（換一組樹）
@@ -230,3 +251,6 @@ Godot --path . --write-movie /tmp/shot/f.png --fixed-fps 30 --quit-after 45 -- -
   第一版漣漪法線用五組正弦波疊加，太陽反光排成一格一格整齊的亮點陣列（兩組相近波長、接近垂直的波就是一個晶格）；
   換成三層往不同方向流的 value noise 才像水。池塘上方另放一顆 `ReflectionProbe`，斜看時水面映出岸邊的樹。
   見 `preview_water_before_after.png`。
+- **第三人稱鏡頭整個畫面是一根樹幹**：鏡頭對樹幹有射線避讓，卻還是鑽進去。`--walk-debug` 印出來才看到：鏡頭離最近的樹幹
+  水平距離是負的、射線卻沒打到——營地在山丘上，鏡頭在人物後上方 2.7 m，加上坡下的樹基座比較低，鏡頭正好從 3 m 高的碰撞圓柱
+  **上方**掠過，而視覺上的樹幹有 5 m 高。圓柱改 6 m。教訓：碰撞體要照「鏡頭會到的高度」做，不是照「人會到的高度」。

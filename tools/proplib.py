@@ -39,7 +39,9 @@ def pm():
                        ("pantsNavy", (0.04, 0.07, 0.15)), ("pantsKhaki", (0.58, 0.45, 0.21)), ("boots", (0.12, 0.07, 0.04)),
                        ("beanieRed", (0.75, 0.12, 0.10)), ("hairDark", (0.045, 0.025, 0.017)), ("hairBrown", (0.10, 0.045, 0.025)),
                        ("hatOlive", (0.15, 0.19, 0.06)), ("mitten", (0.35, 0.22, 0.14)), ("toast", (0.50, 0.24, 0.08)),
-                       ("copper", (0.72, 0.36, 0.20)), ("dripperTerra", (0.55, 0.20, 0.10)), ("coffee", (0.05, 0.03, 0.02))]:
+                       ("copper", (0.72, 0.36, 0.20)), ("dripperTerra", (0.55, 0.20, 0.10)), ("coffee", (0.05, 0.03, 0.02)),
+                       # 散步版：天藍 #7FB8E8、綠毛帽 #5C9E6B
+                       ("puffSky", (0.21, 0.48, 0.81)), ("beanieGreen", (0.11, 0.34, 0.15))]:
             _P[n] = T._mat(n, rgb)
         _P["lanternGlow"] = _emat("lanternGlow", (1.0, 0.82, 0.45), 3.0)
         _P["flameOrange"] = _emat("flameOrange", (1.0, 0.45, 0.12), 4.0)
@@ -1373,8 +1375,8 @@ def _dome(b, c, r, phi0, scale=(1, 1, 1), n=6, k=24):
     b.rings(rings, cap_start=True, pole=c + Vector((0, 0, r * scale[2])))
 
 
-def _camper_head(zh, m, style):
-    """大頭：膚色球 + 黑眼珠（帶亮點）+ 腮紅 + 小嘴；style = beanie（毛帽）或 bucket（漁夫帽）。"""
+def _camper_head(zh, m, style, hat="beanieRed", hair="hairDark"):
+    """大頭：膚色球 + 黑眼珠（帶亮點）+ 腮紅 + 小嘴；style = beanie（毛帽，顏色 hat）或 bucket（漁夫帽）。"""
     R = 0.215
     c = Vector((0.03, 0, zh + 0.60))
     b = B()
@@ -1397,10 +1399,10 @@ def _camper_head(zh, m, style):
     hc = c + Vector((-0.01, 0, 0))
     if style == "beanie":
         _dome(b, hc, R + 0.008, 12, scale=(1, 1.02, 1.0))          # 帽子下露出一圈頭髮
-        b.use(m["hairDark"], smooth=True)
+        b.use(m[hair], smooth=True)
         rb = R + 0.03
         _dome(b, hc, rb, 22, scale=(1, 1.02, 1.15))               # 略高的軟帽身
-        b.use(m["beanieRed"], smooth=True)
+        b.use(m[hat], smooth=True)
         zb = rb * 1.15 * math.sin(math.radians(22))
         b.torus(hc + Vector((0, 0, zb)), rb * math.cos(math.radians(22)), 0.036, axis='Z')   # 反摺帽緣
         b.sphere(hc + Vector((0, 0, rb * 1.15 + 0.02)), 0.058, sub=2)                        # 毛球
@@ -1414,14 +1416,17 @@ def _camper_head(zh, m, style):
     return b
 
 
-def _camper_body(zh, m, jacket, pants, sitting):
-    """身體 = 三顆壓扁的球疊成羽絨外套 + 圍巾；坐姿：大腿往前、小腿垂下（腳碰不到地，像小孩坐大椅子）。"""
+def _camper_body(zh, m, jacket, pants, sitting, legs=True):
+    """身體 = 三顆壓扁的球疊成羽絨外套 + 圍巾；坐姿：大腿往前、小腿垂下（腳碰不到地，像小孩坐大椅子）。
+    legs=False 時不含腿（散步版的腿是獨立關節零件，見 _leg）。"""
     b = B()
     for z, r in ((0.07, 0.19), (0.18, 0.185), (0.29, 0.165)):
         b.sphere((0, 0, zh + z), r, sub=3, scale=(0.85, 1.0, 0.62))
     b.use(m[jacket], smooth=True)
     b.torus((0.01, 0, zh + 0.375), 0.10, 0.045, axis='Z')
     b.use(m["vanCream"], smooth=True)
+    if not legs:
+        return b
     if sitting:
         for s in (-1, 1):
             b.rod((0.02, s * 0.085, zh + 0.02), (0.25, s * 0.10, zh + 0.01), 0.07, segs=10)
@@ -1535,6 +1540,43 @@ def camper_brew(name):
     lb, sh2 = _arm_mug(zh, m, "fleecePlum")
     _part(lb, name + "_arm_l", sh2, body)
     _part(_pour(m, tip), name + "_pour", tip, body)
+    return body
+
+
+def _leg(zh, m, pants, s):
+    """一條腿（大腿、小腿、靴子），原點在髖關節，走路時前後擺。"""
+    b = B()
+    b.rod((0.0, s * 0.085, zh), (0.01, s * 0.09, zh - 0.20), 0.07, segs=10)
+    b.rod((0.01, s * 0.09, zh - 0.20), (0.02, s * 0.09, zh - 0.38), 0.06, segs=10)
+    b.use(m[pants], smooth=True)
+    b.sphere((0.06, s * 0.09, zh - 0.41), 0.085, sub=2, scale=(1.3, 0.85, 0.75))
+    b.use(m["boots"], smooth=True)
+    return b, (0.0, s * 0.085, zh)
+
+
+def _arm_hang(zh, m, jacket, s):
+    """自然下垂的手臂，原點在肩膀。"""
+    sh = (0.03, s * 0.17, zh + 0.30)
+    hand = (0.07, s * 0.20, zh + 0.03)
+    b = B()
+    b.rod(sh, hand, 0.055, segs=10)
+    b.use(m[jacket], smooth=True)
+    b.sphere(hand, 0.065, sub=2)
+    b.use(m["mitten"], smooth=True)
+    return b, sh
+
+
+def camper_walk(name):
+    """可操作的露營者（散步模式）：天藍羽絨外套、綠毛帽；兩腿、兩臂、頭各自是關節零件，Godot 端算走路循環。"""
+    m = pm()
+    zh = 0.47
+    body = _part(_camper_body(zh, m, "puffSky", "pantsNavy", False, legs=False), name, (0, 0, 0))
+    _part(_camper_head(zh, m, "beanie", hat="beanieGreen", hair="hairBrown"), name + "_head", (0.02, 0, zh + 0.40), body)
+    for s, tag in ((-1, "r"), (1, "l")):
+        lb, lp = _leg(zh, m, "pantsNavy", s)
+        _part(lb, name + "_leg_" + tag, lp, body)
+        ab, ap = _arm_hang(zh, m, "puffSky", s)
+        _part(ab, name + "_arm_" + tag, ap, body)
     return body
 
 

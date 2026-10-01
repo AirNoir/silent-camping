@@ -149,15 +149,29 @@ shader_type spatial;
 render_mode cull_disabled, diffuse_lambert_wrap;
 uniform vec4 albedo : source_color = vec4(1.0);
 uniform float wind = 0.035;
+uniform vec3 cam_pos = vec3(0.0);     // 散步模式：鏡頭→角色這條線段附近的葉子用抖動淡出（鏡頭端半徑 cam_fade、角色端 1 m），
+uniform vec3 cam_target = vec3(0.0);  // 第三人稱鏡頭才不會被樹冠糊住、角色也不會被擋住
+uniform float cam_fade = 0.0;         // 0 = 關（環繞視角）。用世界座標而不是 VERTEX.z，陰影 pass 才不會跟著破洞
 varying vec3 wnrm;
+varying vec3 wpos;
 void vertex() {
 	vec3 wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	float t = TIME * 1.3;
 	float w = sin(t + wp.x * 0.5 + wp.z * 0.3) + 0.5 * sin(t * 1.9 + wp.y * 0.7 + wp.z * 0.4);
 	VERTEX.xz += w * wind * clamp(VERTEX.y * 0.6, 0.0, 1.0);
 	wnrm = MODEL_NORMAL_MATRIX * NORMAL;
+	wpos = wp;
 }
 void fragment() {
+	if (cam_fade > 0.0) {
+		vec3 ab = cam_target - cam_pos;
+		float t = clamp(dot(wpos - cam_pos, ab) / max(dot(ab, ab), 1e-4), 0.0, 1.0);
+		float r = mix(cam_fade, 1.0, t);
+		float f = smoothstep(r * 0.45, r, distance(wpos, cam_pos + ab * t));
+		if (f < fract(sin(dot(FRAGCOORD.xy, vec2(12.9898, 78.233))) * 43758.5453)) {
+			discard;
+		}
+	}
 	// 用 Blender 烘好的樹冠球面法線，正反面同一個方向（Godot 預設會翻背面法線，這裡繞過）
 	NORMAL = normalize((VIEW_MATRIX * vec4(wnrm, 0.0)).xyz);
 	ALBEDO = albedo.rgb * COLOR.rgb;
@@ -363,6 +377,22 @@ var tent_light: OmniLight3D
 var headlights: Array[SpotLight3D] = []
 var dust_mat: StandardMaterial3D
 var water_mat: ShaderMaterial
+
+# 散步模式：P 切換，操作一個 Q 版露營者（scripts/walker.gd）在場景裡走，環繞鏡頭變成第三人稱跟拍
+const WalkerScript := preload("res://scripts/walker.gd")
+var walk_mode := false
+var walker                       # CharacterBody3D（walker.gd），第一次進散步模式才建立
+var orbit_saved := {}
+var tree_cols: Array[Vector3] = []   # (x, z, 樹幹半徑)：給散步碰撞用
+var leaf_mats: Array[ShaderMaterial] = []   # 所有葉子材質：散步時要餵鏡頭位置做近距離淡出
+var bark_mats: Array[StandardMaterial3D] = []   # 樹幹材質：散步時貼著鏡頭的樹幹用抖動淡出
+var walker_mats: Array[StandardMaterial3D] = []
+var walk_cam_d := 6.5                # 第三人稱鏡頭實際距離（被樹幹／地形擋住時縮短，再慢慢放回）
+var walk_debug := false
+const WALK_SPAWN := Vector2(-5.0, -1.2)   # 營火與桌子之間的空地（營地平整墊內，沒有樹）
+const CHAIR_OFFS := [Vector2(-1.7, 0.9), Vector2(0.7, 1.8), Vector2(1.9, -0.7)]
+const HELP_ORBIT := "拖曳旋轉　滾輪縮放　N 日／黃昏／夜（30 秒漸變）　A 自動循環　M 靜音　P 散步"
+const HELP_WALK := "WASD／方向鍵 走路　Shift 跑　拖曳轉鏡頭　滾輪遠近　P 回到環繞視角"
 var night_mats := {}   # 材質名 → [StandardMaterial3D]，夜晚要開自發光的（車燈罩、尾燈）
 const NIGHT_MATS := ["headlightGlass", "tailRed"]
 var bench_t := 0.0
@@ -405,6 +435,7 @@ func _ready() -> void:
 	_build_forest()
 	_build_understory()
 	_build_props()
+	_build_colliders()
 	_build_dust()
 	_build_audio()
 	_build_camera()
@@ -457,6 +488,15 @@ func _ready() -> void:
 		elif arg == "--mute":
 			muted = true
 			_apply_state(tod_cur)
+		elif arg == "--walk":
+			_enter_walk()
+		elif arg == "--walk-debug":
+			walk_debug = true
+		elif arg.begins_with("--walk-auto="):   # debug／截圖：固定輸入 x,z[,run]（先進散步模式）
+			_enter_walk()
+			var v := arg.trim_prefix("--walk-auto=").split_floats(",")
+			walker.auto_input = Vector2(v[0], v[1])
+			walker.auto_run = v.size() > 2 and v[2] > 0.5
 		elif arg.begins_with("--demo="):
 			demo_len = float(arg.trim_prefix("--demo="))
 			cam_locked = true
@@ -800,11 +840,14 @@ func _style_mesh(src: Mesh) -> ArrayMesh:
 			var lm := ShaderMaterial.new()
 			lm.shader = leaf_shader
 			lm.set_shader_parameter("albedo", PALETTE[m.resource_name])
+			leaf_mats.append(lm)
 			mesh.surface_set_material(i, lm)
 			continue
 		m = m.duplicate()
 		if PALETTE.has(m.resource_name):
 			m.albedo_color = PALETTE[m.resource_name]
+		if m.resource_name == "woodBark":
+			bark_mats.append(m)
 		if m.resource_name in ["grass", "colorRed", "colorYellow", "colorPurple"]:
 			m.cull_mode = BaseMaterial3D.CULL_DISABLED  # 單片花瓣／葉子要雙面
 		m.vertex_color_use_as_albedo = true
@@ -934,8 +977,10 @@ func _build_forest() -> void:
 				if r <= acc:
 					nm = k
 					break
-			xfs[nm].append(_xf(x, z, rng.randf_range(2.6, 3.6), -0.08))
+			var s := rng.randf_range(2.6, 3.6)
+			xfs[nm].append(_xf(x, z, s, -0.08))
 			cols[nm].append(_tint(0.85, 1.12))
+			tree_cols.append(Vector3(x, z, 0.13 * s))
 			count += 1
 	for nm: String in names:
 		place_multimesh(tree_dir + "/" + nm, xfs[nm], cols[nm])
@@ -1018,7 +1063,7 @@ func _build_props() -> void:
 	place_one("gen/campfire", FIRE.x, FIRE.y, 1.0, 0.4, 0.0)
 	place_one("gen/tripod_kettle", FIRE.x, FIRE.y, 1.0, 1.1, 0.0)
 	var chairs := ["gen/camp_chair_blue", "gen/camp_chair_red", "gen/camp_chair_blue"]
-	var offs := [Vector2(-1.7, 0.9), Vector2(0.7, 1.8), Vector2(1.9, -0.7)]
+	var offs := CHAIR_OFFS
 	for i in 3:
 		var cp: Vector2 = FIRE + offs[i]
 		var d: Vector2 = FIRE - cp
@@ -1208,6 +1253,132 @@ func _loop_stream(nm: String) -> AudioStream:
 	return s
 
 
+func _build_colliders() -> void:
+	# 散步模式的碰撞：只放「走過去會穿幫」的大東西——樹幹、車、帳篷、桌椅、營火、木箱、大石、告示牌
+	var body := StaticBody3D.new()
+	body.name = "Colliders"
+	add_child(body)
+	for tc in tree_cols:
+		var cyl := CylinderShape3D.new()
+		cyl.radius = tc.z
+		cyl.height = 6.0   # 高大樹種的樹幹到 5 m；鏡頭在山丘上會從 3 m 高的圓柱上方掠過去
+		_shape_at(body, cyl, Vector3(tc.x, h(tc.x, tc.y) + 3.0, tc.y))
+	var van_box := BoxShape3D.new()
+	van_box.size = Vector3(3.2, 1.9, 2.0)
+	_shape_at(body, van_box, Vector3(VAN.x, h(VAN.x, VAN.y) + 0.95, VAN.y), VAN_ROT)
+	var tent_cyl := CylinderShape3D.new()
+	tent_cyl.radius = 1.75
+	tent_cyl.height = 2.0
+	_shape_at(body, tent_cyl, Vector3(TENT.x, h(TENT.x, TENT.y) + 1.0, TENT.y))
+	var table_box := BoxShape3D.new()
+	table_box.size = Vector3(1.25, 0.8, 0.8)
+	_shape_at(body, table_box, Vector3(TABLE.x, h(TABLE.x, TABLE.y) + 0.4, TABLE.y), 0.35)
+	for off: Vector2 in CHAIR_OFFS:
+		var cp: Vector2 = FIRE + off
+		var c := CylinderShape3D.new()
+		c.radius = 0.36
+		c.height = 1.0
+		_shape_at(body, c, Vector3(cp.x, h(cp.x, cp.y) + 0.5, cp.y))
+	var fire_cyl := CylinderShape3D.new()
+	fire_cyl.radius = 0.8
+	fire_cyl.height = 0.8
+	_shape_at(body, fire_cyl, Vector3(FIRE.x, h(FIRE.x, FIRE.y) + 0.4, FIRE.y))
+	var bp := Vector3(TABLE.x, 0.0, TABLE.y) + Basis(Vector3.UP, 0.35) * Vector3(-0.05, 0.0, 0.64)   # 手沖的人＋木箱
+	var brew := CylinderShape3D.new()
+	brew.radius = 0.42
+	brew.height = 1.6
+	_shape_at(body, brew, Vector3(bp.x, h(bp.x, bp.z) + 0.8, bp.z))
+	for item: Array in [[TABLE + Vector2(-1.0, 0.5), 0.75], [VAN + Vector2(-1.4, -3.2), 0.65], [VAN + Vector2(-0.6, -3.5), 0.55], [CAMP + Vector2(-3.5, 1.5), 1.1]]:
+		var pt: Vector2 = item[0]
+		var bx := BoxShape3D.new()
+		bx.size = Vector3(item[1], 0.8, item[1])
+		_shape_at(body, bx, Vector3(pt.x, h(pt.x, pt.y) + 0.4, pt.y))
+	for item: Array in [[POND + Vector2(5.4, 4.6), 0.55], [POND + Vector2(-3.8, -4.9), 0.45], [Vector2(-17.5, 8.0), 0.3]]:
+		var pt: Vector2 = item[0]
+		var sp := SphereShape3D.new()
+		sp.radius = item[1]
+		_shape_at(body, sp, Vector3(pt.x, h(pt.x, pt.y) + item[1] * 0.6, pt.y))
+
+
+func _shape_at(body: StaticBody3D, shape: Shape3D, pos: Vector3, rot := 0.0) -> void:
+	var cs := CollisionShape3D.new()
+	cs.shape = shape
+	cs.position = pos
+	cs.rotation.y = rot
+	body.add_child(cs)
+
+
+func toggle_walk() -> void:
+	if walk_mode:
+		_exit_walk()
+	else:
+		_enter_walk()
+
+
+func _enter_walk() -> void:
+	if walk_mode:
+		return
+	if walker == null:
+		walker = WalkerScript.new()
+		walker.ground = h
+		walker.cam_yaw = func() -> float: return yaw
+		walker.bounds = SIZE * 0.5 - 1.0
+		walker.water_y = WATER_Y
+		var sc: Node3D = (load("res://assets/gen/camper_walk.glb") as PackedScene).instantiate()
+		for mi: MeshInstance3D in sc.find_children("*", "MeshInstance3D", true, false):
+			mi.mesh = _style_mesh(mi.mesh)
+			for i in mi.mesh.get_surface_count():
+				var wm := mi.mesh.surface_get_material(i) as StandardMaterial3D
+				if wm:
+					walker_mats.append(wm)
+		for wm in walker_mats:   # 鏡頭被擠到角色身上時角色自己淡出，不會看到模型內部
+			wm.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_PIXEL_DITHER
+			wm.distance_fade_min_distance = 0.5
+			wm.distance_fade_max_distance = 1.3
+		add_child(walker)
+		walker.setup(sc)
+		walker.position = Vector3(WALK_SPAWN.x, h(WALK_SPAWN.x, WALK_SPAWN.y), WALK_SPAWN.y)
+		var to_fire := FIRE - WALK_SPAWN
+		walker.face = atan2(-to_fire.y, to_fire.x)
+	walker.visible = true
+	walker.set_physics_process(true)
+	orbit_saved = {"yaw": yaw, "pitch": pitch, "dist": dist, "pivot": pivot.position, "fov": cam.fov}
+	walk_mode = true
+	pitch = deg_to_rad(-16.0)
+	dist = 6.5
+	walk_cam_d = dist
+	cam.fov = 42.0
+	attrs.dof_blur_near_enabled = false
+	for lm in leaf_mats:
+		lm.set_shader_parameter("cam_fade", 2.4)
+	for bm in bark_mats:   # 樹幹擠到鏡頭前 1.8 m 內就抖動淡出（例如人往鏡頭方向跑、樹夾在中間）
+		bm.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_PIXEL_DITHER
+		bm.distance_fade_min_distance = 1.0
+		bm.distance_fade_max_distance = 2.4
+	if help_label:
+		help_label.text = HELP_WALK
+
+
+func _exit_walk() -> void:
+	if not walk_mode:
+		return
+	walk_mode = false
+	walker.visible = false
+	walker.set_physics_process(false)
+	yaw = orbit_saved["yaw"]
+	pitch = orbit_saved["pitch"]
+	dist = orbit_saved["dist"]
+	pivot.position = orbit_saved["pivot"]
+	cam.fov = orbit_saved["fov"]
+	attrs.dof_blur_near_enabled = true
+	for lm in leaf_mats:
+		lm.set_shader_parameter("cam_fade", 0.0)
+	for bm in bark_mats:
+		bm.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_DISABLED
+	if help_label:
+		help_label.text = HELP_ORBIT
+
+
 func _string_lights(a: Vector3, b: Vector3, bulbs: int) -> void:
 	var rope_mat := StandardMaterial3D.new()
 	rope_mat.albedo_color = Color(0.25, 0.22, 0.2)
@@ -1354,6 +1525,39 @@ func _build_camera() -> void:
 func _apply_camera() -> void:
 	pivot.rotation = Vector3(pitch, yaw, 0)
 	cam.position = Vector3(0, 0, dist)
+	if walk_mode:
+		# 散步：人眼高度，景深放寬到遠處才糊，不然前方的森林是一片霧
+		attrs.dof_blur_far_distance = 30.0
+		attrs.dof_blur_far_transition = 30.0
+		# 鏡頭不穿過樹幹／道具、不鑽進地形：被擋住就縮短距離（馬上），沒擋住再慢慢放回
+		var origin := pivot.global_position
+		var back := Basis.from_euler(Vector3(pitch, yaw, 0)) * Vector3(0, 0, 1)
+		var d := dist
+		if walker:
+			var q := PhysicsRayQueryParameters3D.create(origin, origin + back * dist)
+			q.exclude = [walker.get_rid()]
+			var hit := get_world_3d().direct_space_state.intersect_ray(q)
+			if hit:
+				d = minf(d, origin.distance_to(hit.position) - 0.5)
+		while d > 1.4:
+			var p := origin + back * d
+			if p.y > h(p.x, p.z) + 0.5:
+				break
+			d -= 0.25
+		d = maxf(d, 1.4)   # 最近貼到 1.4 m；夾在中間的樹幹與角色自己會抖動淡出
+		if walk_debug and Engine.get_process_frames() % 15 == 0:
+			var cp := origin + back * d
+			var near := 99.0
+			for tc in tree_cols:
+				near = minf(near, Vector2(cp.x, cp.z).distance_to(Vector2(tc.x, tc.y)) - tc.z)
+			print("WALKCAM walker=%s cam=%s d=%.2f want=%.2f nearest_trunk=%.2f terrain_clear=%.2f" % [
+				walker.position.snapped(Vector3(0.1, 0.1, 0.1)), cp.snapped(Vector3(0.1, 0.1, 0.1)), d, dist, near, cp.y - h(cp.x, cp.z)])
+		walk_cam_d = d if d < walk_cam_d else lerpf(walk_cam_d, d, minf(1.0, 3.0 * get_process_delta_time()))
+		cam.position = Vector3(0, 0, walk_cam_d)
+		for lm in leaf_mats:
+			lm.set_shader_parameter("cam_pos", cam.global_position)
+			lm.set_shader_parameter("cam_target", walker.position + Vector3(0.0, 0.8, 0.0) if walker else origin)
+		return
 	attrs.dof_blur_far_distance = dist + 8.0
 	attrs.dof_blur_far_transition = dist * 0.45
 	attrs.dof_blur_near_distance = dist - 14.0
@@ -1375,6 +1579,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			muted = not muted
 			_apply_state(tod_cur)
 			return
+		if kc == KEY_P and not cam_locked:
+			toggle_walk()
+			return
 	if cam_locked:
 		return
 	if event is InputEventMouseButton:
@@ -1382,9 +1589,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			dragging = mb.pressed
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
-			dist = maxf(34.0, dist * 0.92)
+			dist = maxf(3.0 if walk_mode else 34.0, dist * 0.92)
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
-			dist = minf(120.0, dist / 0.92)
+			dist = minf(12.0 if walk_mode else 120.0, dist / 0.92)
 		idle = 0.0
 	elif event is InputEventMouseMotion and dragging:
 		var mm := event as InputEventMouseMotion
@@ -1413,6 +1620,9 @@ func _process(delta: float) -> void:
 		if bench_t > 6.0:
 			print("BENCH %s fps=%.1f  (%.2f ms/frame)" % [tree_dir, bench_frames / bench_acc, 1000.0 * bench_acc / bench_frames])
 			get_tree().quit()
+	if walk_mode and walker:
+		pivot.position = pivot.position.lerp(walker.position + Vector3(0.0, 0.9, 0.0), minf(1.0, 8.0 * delta))
+		idle = 0.0
 	idle += delta
 	if idle > 4.0:
 		yaw += delta * 0.05
@@ -1591,7 +1801,7 @@ func _build_help() -> void:
 	var font := SystemFont.new()
 	font.font_names = PackedStringArray(["PingFang TC", "Heiti TC", "Noto Sans CJK TC", "sans-serif"])
 	var l := Label.new()
-	l.text = "拖曳旋轉　滾輪縮放　N 日／黃昏／夜（30 秒漸變）　A 自動循環　M 靜音"
+	l.text = HELP_ORBIT
 	l.add_theme_font_override("font", font)
 	l.add_theme_font_size_override("font_size", 14)
 	l.add_theme_color_override("font_color", Color(0.3, 0.35, 0.4, 0.7))
