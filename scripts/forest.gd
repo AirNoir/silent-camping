@@ -50,10 +50,12 @@ const PROP_MATS := {
 	"bagCoral": {"roughness": 0.85}, "coolerBlue": {"roughness": 0.35, "clearcoat": 0.3},
 	"tentGreen": {"roughness": 0.95}, "tentBeige": {"roughness": 0.95}, "tentFloor": {"roughness": 0.9}, "tentMesh": {"roughness": 1.0},
 	"rubber": {"roughness": 0.85}, "canvas": {"roughness": 0.95}, "canvasTrim": {"roughness": 0.95},
-	# 露營者
-	"skin": {"roughness": 0.7}, "eyeDark": {"roughness": 0.15}, "blush": {"roughness": 0.8},
-	"puffMustard": {"roughness": 0.5}, "fleecePlum": {"roughness": 0.95}, "beanieRed": {"roughness": 0.95},
-	"mitten": {"roughness": 0.8}, "toast": {"roughness": 0.6},
+	# 露營者：塑膠玩具人偶的光澤（低粗糙度 + 一點 clearcoat）；face 有貼圖，只調質感不換色
+	"skin": {"roughness": 0.5, "clearcoat": 0.25}, "face": {"roughness": 0.5, "clearcoat": 0.25},
+	"puffSky": {"roughness": 0.45, "clearcoat": 0.3}, "puffMustard": {"roughness": 0.45, "clearcoat": 0.3}, "fleecePlum": {"roughness": 0.6, "clearcoat": 0.2},
+	"pantsNavy": {"roughness": 0.55, "clearcoat": 0.2}, "pantsKhaki": {"roughness": 0.55, "clearcoat": 0.2}, "boots": {"roughness": 0.4, "clearcoat": 0.3},
+	"beanieRed": {"roughness": 0.75}, "beanieGreen": {"roughness": 0.75}, "hatOlive": {"roughness": 0.7},
+	"mitten": {"roughness": 0.6, "clearcoat": 0.2}, "toast": {"roughness": 0.6}, "eyeDark": {"roughness": 0.15}, "blush": {"roughness": 0.8},
 	"copper": {"roughness": 0.3, "metallic": 0.85}, "dripperTerra": {"roughness": 0.45, "clearcoat": 0.25}, "coffee": {"roughness": 0.15},
 }
 
@@ -322,11 +324,10 @@ var flame_shader: Shader
 var bulb_mats_all: Array[StandardMaterial3D] = []
 
 # 露營者：程式動畫（{n, base, terms=[[axis, amp, hz, phase], …]}）、手沖壺與水柱
-var anims: Array[Dictionary] = []
+const RigScript := preload("res://scripts/rig.gd")
+var npcs: Array[Dictionary] = []   # 營地的兩位露營者：{node, sk, rig, kind, seed, 手持道具…}
 var anim_t := 0.0
-var kettle: Node3D
-var kettle_tip: Node3D
-var pour: Node3D
+var pour: MeshInstance3D
 var pour_y := 0.0
 
 # 環境音：名稱 → AudioStreamPlayer（風、鳥、蟲）或 AudioStreamPlayer3D（營火、池塘）；音量在 TOD_PRESETS 的 a_* 鍵
@@ -832,27 +833,28 @@ func _style_mesh(src: Mesh) -> ArrayMesh:
 		var m := mesh.surface_get_material(i) as StandardMaterial3D
 		if m == null:
 			continue
-		if m.resource_name in ["leafsGreen", "leafsDark"]:
+		var nm := m.resource_name.get_slice(".", 0)   # Blender 同名材質會變 face.001：用去掉後綴的名字查表
+		if nm in ["leafsGreen", "leafsDark"]:
 			# 葉子：雙面、乘頂點色與實例色、隨風擺動
 			if leaf_shader == null:
 				leaf_shader = Shader.new()
 				leaf_shader.code = LEAF_SHADER
 			var lm := ShaderMaterial.new()
 			lm.shader = leaf_shader
-			lm.set_shader_parameter("albedo", PALETTE[m.resource_name])
+			lm.set_shader_parameter("albedo", PALETTE[nm])
 			leaf_mats.append(lm)
 			mesh.surface_set_material(i, lm)
 			continue
 		m = m.duplicate()
-		if PALETTE.has(m.resource_name):
-			m.albedo_color = PALETTE[m.resource_name]
-		if m.resource_name == "woodBark":
+		if PALETTE.has(nm):
+			m.albedo_color = PALETTE[nm]
+		if nm == "woodBark":
 			bark_mats.append(m)
-		if m.resource_name in ["grass", "colorRed", "colorYellow", "colorPurple"]:
+		if nm in ["grass", "colorRed", "colorYellow", "colorPurple"]:
 			m.cull_mode = BaseMaterial3D.CULL_DISABLED  # 單片花瓣／葉子要雙面
 		m.vertex_color_use_as_albedo = true
-		if PROP_MATS.has(m.resource_name):
-			var pmv: Dictionary = PROP_MATS[m.resource_name]
+		if PROP_MATS.has(nm):
+			var pmv: Dictionary = PROP_MATS[nm]
 			m.roughness = pmv.get("roughness", 0.6)
 			m.metallic = pmv.get("metallic", 0.0)
 			if pmv.has("albedo"):
@@ -873,7 +875,7 @@ func _style_mesh(src: Mesh) -> ArrayMesh:
 				m.metallic_specular = 0.5
 		elif not m.emission_enabled:
 			m.roughness = 0.9
-		if m.emission_enabled and m.resource_name in ["flameOrange", "flameYellow"]:
+		if m.emission_enabled and nm in ["flameOrange", "flameYellow"]:
 			# 火焰：換成會扭動的 shader（頂點隨時間擺動 + 自發光呼吸）
 			if flame_shader == null:
 				flame_shader = Shader.new()
@@ -882,15 +884,15 @@ func _style_mesh(src: Mesh) -> ArrayMesh:
 			fm.shader = flame_shader
 			fm.set_shader_parameter("albedo", m.emission)
 			fm.set_shader_parameter("glow", m.emission_energy_multiplier)
-			fm.set_shader_parameter("seed", 1.7 if m.resource_name == "flameYellow" else 0.0)
+			fm.set_shader_parameter("seed", 1.7 if nm == "flameYellow" else 0.0)
 			fm.set_meta("base", m.emission_energy_multiplier)
 			flame_mats.append(fm)
 			mesh.surface_set_material(i, fm)
 			continue
-		if m.resource_name in NIGHT_MATS:
-			if not night_mats.has(m.resource_name):
-				night_mats[m.resource_name] = []
-			night_mats[m.resource_name].append(m)
+		if nm in NIGHT_MATS:
+			if not night_mats.has(nm):
+				night_mats[nm] = []
+			night_mats[nm].append(m)
 		mesh.surface_set_material(i, m)
 	return mesh
 
@@ -1135,52 +1137,101 @@ func _build_campers(chair: Vector2) -> void:
 	# 烤棉花糖的：坐在紅椅子上，跟椅子同一個朝向（模型 +X 面向營火）
 	var d: Vector2 = FIRE - chair
 	var rot := atan2(-d.y, d.x)
-	var roaster := place_scene("gen/camper_roast", chair.x, chair.y, rot, 0.0)
-	_anim(roaster.find_child("*_arms", true, false), Vector3.ZERO, [[2, 0.06, 0.28, 0.0], [1, 0.045, 0.19, 1.3]])
-	_anim(roaster.find_child("*_head", true, false), Vector3.ZERO, [[2, 0.05, 0.22, 2.0], [0, 0.04, 0.15, 0.7]])
+	var roaster := _spawn_camper("camper_roast", chair.x, chair.y, rot, 0.0, "roast")
+	roaster["stick"] = _attach_prop(roaster, "hand_r", "gen/marshmallow_stick")
 	var side := Basis(Vector3.UP, rot) * Vector3(-0.1, 0.0, 0.5)
 	place_one("gen/marshmallow_bag", chair.x + side.x, chair.y + side.z, 1.0, rot + 0.4, 0.0)
-	# 手沖咖啡的：站在桌邊的木箱上（桌子對 2.9 頭身來說太高），壺嘴正對桌上的濾杯
+	# 手沖咖啡的：站在桌邊的木箱上（桌子對 2.8 頭身來說太高），壺嘴正對桌上的濾杯
 	var tb := Basis(Vector3.UP, 0.35)   # 桌子的朝向（和 place_one 給桌子的 rot 一樣）
 	var tp := Vector3(TABLE.x, 0.0, TABLE.y)
-	var bp := tp + tb * Vector3(-0.05, 0.0, 0.64)
+	var bp := tp + tb * Vector3(-0.05, 0.0, 0.56)
 	place_one("gen/crate_A", bp.x, bp.z, 1.0, 0.35, 0.0)
-	var brewer := place_scene("gen/camper_brew", bp.x, bp.z, 0.35 + PI / 2.0, 0.38)
-	_anim(brewer.find_child("*_head", true, false), Vector3(0.0, 0.0, -0.12), [[2, 0.03, 0.25, 0.0], [1, 0.04, 0.16, 1.1]])
-	_anim(brewer.find_child("*_arm_l", true, false), Vector3.ZERO, [[2, 0.03, 0.23, 0.5]])
-	kettle = brewer.find_child("*_kettle", true, false)
-	kettle_tip = brewer.find_child("*_tip", true, false)
-	pour = brewer.find_child("*_pour", true, false)
+	var brewer := _spawn_camper("camper_brew", bp.x, bp.z, 0.35 + PI / 2.0, 0.38, "brew")
+	brewer["kettle"] = _attach_prop(brewer, "hand_r", "gen/kettle_hand")
+	brewer["mug"] = _attach_prop(brewer, "hand_l", "gen/mug_hand")
 	var cs := tp + tb * Vector3(0.09, 0.0, 0.0)
 	place_one("gen/coffee_set", cs.x, cs.z, 1.0, 0.35, 0.74)
 	pour_y = h(cs.x, cs.z) + 0.74 + 0.19   # 水柱落到濕咖啡粉那一層
+	pour = MeshInstance3D.new()   # 水柱：細圓柱，每幀縮放到「壺嘴 → 濾杯口」的長度
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.006
+	cyl.bottom_radius = 0.005
+	cyl.height = 1.0
+	cyl.radial_segments = 6
+	var wm := StandardMaterial3D.new()
+	wm.albedo_color = Color(0.78, 0.88, 0.94, 0.5)
+	wm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	wm.roughness = 0.2
+	cyl.material = wm
+	pour.mesh = cyl
+	pour.visible = false
+	add_child(pour)
 	var mug := tp + tb * Vector3(-0.02, 0.0, -0.10)   # 旁邊那杯沖好的
 	_steam(Vector3(mug.x, h(mug.x, mug.z) + 0.74 + 0.11, mug.z), 10)
 
 
-func _anim(n: Node3D, base: Vector3, terms: Array) -> void:
-	if n != null:
-		anims.append({"n": n, "base": base, "terms": terms})
+func _spawn_camper(model: String, x: float, z: float, rot: float, y_off: float, kind: String) -> Dictionary:
+	var sc := place_scene("gen/" + model, x, z, rot, y_off)
+	var sk: Skeleton3D = sc.find_children("*", "Skeleton3D", true, false)[0]
+	var face: StandardMaterial3D = null
+	for mi: MeshInstance3D in sc.find_children("*", "MeshInstance3D", true, false):
+		for i in mi.mesh.get_surface_count():
+			var m := mi.mesh.surface_get_material(i) as StandardMaterial3D
+			if m and m.resource_name.begins_with("face"):
+				face = m
+	var npc := {"node": sc, "sk": sk, "rig": RigScript.new(sk, face), "kind": kind, "seed": randf() * 10.0}
+	npcs.append(npc)
+	return npc
+
+
+func _attach_prop(npc: Dictionary, bone: String, model: String) -> Node3D:
+	## 道具掛到手骨：BoneAttachment3D 跟著骨頭走；道具本身的朝向每幀由 _campers_tick 設（原點在握把）
+	var ba := BoneAttachment3D.new()
+	ba.bone_name = bone
+	(npc["sk"] as Skeleton3D).add_child(ba)
+	var mi := MeshInstance3D.new()
+	mi.mesh = kenney_mesh(model)[0]
+	ba.add_child(mi)
+	return mi
 
 
 func _campers_tick(delta: float) -> void:
 	anim_t += delta   # 用累加的 delta 而不是 ticks：Movie Maker 慢速渲染時動畫才不會被加速
-	var t := anim_t
-	for a in anims:
-		var r: Vector3 = a["base"]
-		for tm in a["terms"]:
-			r[tm[0]] += tm[1] * sin(t * tm[2] * TAU + tm[3])
-		(a["n"] as Node3D).rotation = r
-	if kettle == null:
-		return
-	# 手沖：每 7 秒一輪——舉壺傾倒 3 秒、放回；水柱跟著壺嘴走、長度縮放到濾杯口
-	var p := fmod(t, 7.0)
-	var tilt := smoothstep(0.6, 1.6, p) * (1.0 - smoothstep(4.2, 5.2, p))
-	kettle.rotation.z = -0.42 * tilt
-	var tip := kettle_tip.global_position
-	pour.visible = tilt > 0.6
-	pour.global_position = tip
-	pour.scale.y = maxf(0.05, (tip.y - pour_y) / 0.3)
+	for npc in npcs:
+		var rig = npc["rig"]
+		var t: float = anim_t + npc["seed"]
+		var breathe := 0.012 * sin(t * 1.5)
+		var node: Node3D = npc["node"]
+		if npc["kind"] == "roast":
+			# 坐著：髖在椅面上、大腿往前、小腿垂下；右手握棍慢慢轉、偶爾抬高看一眼，左手放腿上
+			var lift := 0.04 * sin(t * 0.45) + 0.02 * sin(t * 1.1)
+			rig.torso(Vector3(0.02, 0.515, 0.0), 0.0, -0.08 + breathe, 0.02 * sin(t * 0.3), 0.0, breathe * 0.5,
+				0.15 * sin(t * 0.37) - 0.1, 0.12 + 0.05 * sin(t * 0.8), 0.03 * sin(t * 0.5))
+			rig.leg("l", Vector3(0.21, 0.21, -0.09), Vector3(0.3, -0.95, 0.0), Vector3.RIGHT)
+			rig.leg("r", Vector3(0.22, 0.20, 0.09), Vector3(0.35, -0.94, 0.0), Vector3.RIGHT)
+			rig.arm("r", Vector3(0.21, 0.63 + lift, 0.09), Vector3(-0.6, -0.8, 0.3))
+			rig.arm("l", Vector3(0.14, 0.52, -0.12), Vector3(-0.6, -0.8, -0.3))
+			rig.apply()
+			(npc["stick"] as Node3D).global_transform.basis = node.global_transform.basis * Basis(Vector3.BACK, -0.10 - lift * 2.0) * Basis(Vector3.UP, 0.04 * sin(t * 0.7))
+		else:
+			# 站著手沖：每 7 秒一輪——舉壺傾倒 3 秒、放回；左手端著自己的杯子
+			var p := fmod(t, 7.0)
+			var tilt := smoothstep(0.6, 1.6, p) * (1.0 - smoothstep(4.2, 5.2, p))
+			rig.torso(Vector3(0.0, 0.50, 0.0), 0.0, 0.04 + breathe, 0.0, 0.0, breathe * 0.5, -0.15 - 0.1 * tilt, 0.22 + 0.08 * tilt, 0.0)
+			rig.leg("l", Vector3(0.01, 0.09, -0.09), Vector3.RIGHT, Vector3.RIGHT)
+			rig.leg("r", Vector3(0.01, 0.09, 0.09), Vector3.RIGHT, Vector3.RIGHT)
+			rig.arm("r", Vector3(0.25, 0.78 + 0.03 * tilt, 0.14), Vector3(-0.7, -0.6, 0.4))
+			rig.arm("l", Vector3(0.20, 0.66 + 0.01 * sin(t), -0.13), Vector3(-0.6, -0.8, -0.4))
+			rig.apply()
+			var kettle: Node3D = npc["kettle"]
+			kettle.global_transform.basis = node.global_transform.basis * Basis(Vector3.BACK, -0.45 * tilt)
+			(npc["mug"] as Node3D).global_transform.basis = node.global_transform.basis
+			# 水柱：從壺嘴（握把前 0.28、下 0.06）垂直落到濾杯口
+			var tip: Vector3 = kettle.global_transform * Vector3(0.28, -0.06, 0.0)
+			pour.visible = tilt > 0.6
+			var plen := maxf(tip.y - pour_y, 0.02)
+			pour.global_transform = Transform3D(Basis().scaled(Vector3(1.0, plen, 1.0)), tip - Vector3(0.0, plen * 0.5, 0.0))
+		rig.tick(delta)
 
 
 func _steam(pos: Vector3, amount: int) -> void:
@@ -1336,10 +1387,10 @@ func _enter_walk() -> void:
 			wm.distance_fade_min_distance = 0.5
 			wm.distance_fade_max_distance = 1.3
 		add_child(walker)
-		walker.setup(sc)
 		walker.position = Vector3(WALK_SPAWN.x, h(WALK_SPAWN.x, WALK_SPAWN.y), WALK_SPAWN.y)
 		var to_fire := FIRE - WALK_SPAWN
 		walker.face = atan2(-to_fire.y, to_fire.x)
+		walker.setup(sc)
 	walker.visible = true
 	walker.set_physics_process(true)
 	orbit_saved = {"yaw": yaw, "pitch": pitch, "dist": dist, "pivot": pivot.position, "fov": cam.fov}

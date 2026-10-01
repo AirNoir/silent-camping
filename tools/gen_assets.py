@@ -7,6 +7,7 @@ import bpy, sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import treelib as T
 import proplib as P
+import camperlib as C
 
 args = sys.argv[sys.argv.index("--") + 1:]
 OUT = args[0]
@@ -70,8 +71,9 @@ objs = [
     G(P.camp_chair, "camp_chair_blue"), G(P.camp_chair, "camp_chair_red", "fabricRed"),
     G(P.camp_table, "camp_table"), G(P.lantern, "lantern"), G(P.campfire, "campfire"), G(P.tripod_kettle, "tripod_kettle"),
     G(P.crate, "crate_A"), G(P.crate, "crate_B", (0.42, 0.42, 0.5)), G(P.cooler, "cooler"),
-    # 露營者（多零件階層，整組匯成一個 GLB）與他們的小東西
-    G(P.camper_roast, "camper_roast"), G(P.camper_brew, "camper_brew"), G(P.camper_walk, "camper_walk"),
+    # 露營者（第二代：Skin 長肉 + 骨架 + 貼圖臉，整組匯成一個 GLB）、手持道具與桌上小物
+    G(C.camper, "camper_walk", "walk"), G(C.camper, "camper_roast", "roast"), G(C.camper, "camper_brew", "brew"),
+    G(C.marshmallow_stick, "marshmallow_stick"), G(C.kettle_hand, "kettle_hand"), G(C.mug_hand, "mug_hand"),
     G(P.coffee_set, "coffee_set"), G(P.marshmallow_bag, "marshmallow_bag"),
 ]
 for ob in objs:
