@@ -21,7 +21,7 @@ const ORDER := ["hips", "spine", "neck", "head", "clavicle_l", "upperarm_l", "fo
 	"clavicle_r", "upperarm_r", "forearm_r", "hand_r", "pelvis_l", "thigh_l", "shin_l", "foot_l",
 	"pelvis_r", "thigh_r", "shin_r", "foot_r"]
 # 末端骨沒有子骨可量長度，用 camperlib 關節表的值
-const LEAF_LEN := {"hips": 0.08, "head": 0.38, "hand_l": 0.06, "hand_r": 0.06, "foot_l": 0.137, "foot_r": 0.137}
+const LEAF_LEN := {"hips": 0.06, "head": 0.39, "hand_l": 0.055, "hand_r": 0.055, "foot_l": 0.128, "foot_r": 0.128}
 
 
 func _init(skeleton: Skeleton3D, face: StandardMaterial3D = null) -> void:

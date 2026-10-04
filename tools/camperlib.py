@@ -12,24 +12,27 @@ from mathutils import Vector
 import treelib as T
 from proplib import pm, B, _dome
 
-# 關節：名稱 → (位置 (x 前, y 左, z 上), Skin 半徑 (rx, ry))。單位公尺，約 2.8 頭身，站姿、手臂自然下垂
+# 關節：名稱 → (位置 (x 前, y 左, z 上), Skin 半徑 (rx, ry))。單位公尺。
+# 三頭身（頭徑 ~0.41、全高 ~1.05）：大頭、蛋形軀幹、短胖腿。
+# 肩膀不再是「細管黏在軀幹上」：肩關節往內收（y 0.16，埋進軀幹側面）、半徑加大到接近軀幹，
+# 手臂是從肩到腕逐漸收細的泡泡袖，根部和軀幹融成同一個面（參考織夢島 Link 那種軟膠人偶的手臂）。
 JOINTS = {
-    "hips": ((0.0, 0.0, 0.50), (0.15, 0.17)),
-    "chest": ((0.0, 0.0, 0.70), (0.155, 0.175)),
-    "neck": ((0.01, 0.0, 0.84), (0.06, 0.065)),
-    "head_top": ((0.03, 0.0, 1.22), (0.01, 0.01)),
-    "hips_top": ((0.0, 0.0, 0.58), (0.01, 0.01)),
+    "hips": ((0.0, 0.0, 0.40), (0.16, 0.175)),
+    "chest": ((0.0, 0.0, 0.56), (0.15, 0.16)),
+    "neck": ((0.01, 0.0, 0.66), (0.07, 0.07)),
+    "head_top": ((0.03, 0.0, 1.05), (0.01, 0.01)),
+    "hips_top": ((0.0, 0.0, 0.46), (0.01, 0.01)),
 }
 for _s, _n in ((1, "l"), (-1, "r")):
     JOINTS.update({
-        "shoulder_" + _n: ((0.0, _s * 0.19, 0.78), (0.062, 0.062)),
-        "elbow_" + _n: ((0.02, _s * 0.225, 0.63), (0.055, 0.055)),
-        "wrist_" + _n: ((0.05, _s * 0.235, 0.50), (0.05, 0.05)),
-        "hand_" + _n: ((0.07, _s * 0.24, 0.44), (0.065, 0.065)),
-        "hip_" + _n: ((0.0, _s * 0.085, 0.46), (0.09, 0.09)),
-        "knee_" + _n: ((0.01, _s * 0.09, 0.27), (0.075, 0.075)),
-        "ankle_" + _n: ((0.01, _s * 0.09, 0.09), (0.06, 0.06)),
-        "toe_" + _n: ((0.14, _s * 0.09, 0.045), (0.06, 0.05)),
+        "shoulder_" + _n: ((0.0, _s * 0.16, 0.60), (0.092, 0.092)),
+        "elbow_" + _n: ((0.02, _s * 0.215, 0.495), (0.072, 0.072)),
+        "wrist_" + _n: ((0.04, _s * 0.232, 0.415), (0.056, 0.056)),
+        "hand_" + _n: ((0.06, _s * 0.238, 0.365), (0.066, 0.066)),
+        "hip_" + _n: ((0.0, _s * 0.082, 0.34), (0.095, 0.095)),
+        "knee_" + _n: ((0.01, _s * 0.085, 0.19), (0.082, 0.082)),
+        "ankle_" + _n: ((0.01, _s * 0.085, 0.09), (0.066, 0.066)),
+        "toe_" + _n: ((0.13, _s * 0.085, 0.045), (0.062, 0.052)),
     })
 
 # 骨頭：(名稱, 起點關節, 終點關節, 父骨, 材質區, 是否參與 Skin 長肉)
@@ -51,8 +54,8 @@ for _n in ("l", "r"):
         ("foot_" + _n, "ankle_" + _n, "toe_" + _n, "shin_" + _n, "boots", True),
     ]
 
-HEAD_C = Vector((0.03, 0.0, 1.03))
-HEAD_R = 0.21
+HEAD_C = Vector((0.03, 0.0, 0.84))
+HEAD_R = 0.22
 HEAD_SCALE = (1.0, 1.04, 0.94)
 
 # 服裝：材質名稱（pm()）。hat = beanie / bucket
@@ -164,13 +167,13 @@ def _grow_body():
     bpy.context.collection.objects.link(ob)
     mod = ob.modifiers.new("Skin", 'SKIN')
     mod.use_smooth_shade = True
-    mod.branch_smoothing = 0.4
+    mod.branch_smoothing = 0.7   # 肩膀／胯下的分叉處多抹一點，不要有接縫稜線
     for i, n in enumerate(used):
         sv = me.skin_vertices[0].data[i]
         sv.radius = JOINTS[n][1]
         sv.use_root = n == "hips"
     sub = ob.modifiers.new("Sub", 'SUBSURF')
-    sub.levels = 2
+    sub.levels = 3   # 材質區以面為單位切，等級 2 的外套下襬是鋸齒；3 才夠細
     bpy.context.view_layer.update()
     ev = ob.evaluated_get(bpy.context.evaluated_depsgraph_get())
     m2 = ev.to_mesh()
@@ -275,10 +278,10 @@ def camper(name, outfit="walk"):
         c = f.calc_center_median()
         bn = _nearest_bones(c, skin_names)[0][1]
         reg = region_of[bn]
-        # 軀幹與腿之間用高度切（外套下襬 0.455 m），比「最近的骨頭」乾淨；脖子只有圍巾以上才算皮膚
+        # 軀幹與腿之間用高度切（外套下襬 0.37 m），比「最近的骨頭」乾淨；脖子只有圍巾以上才算皮膚
         if bn in ("spine", "clavicle_l", "clavicle_r", "pelvis_l", "pelvis_r", "thigh_l", "thigh_r"):
-            reg = "jacket" if c.z > 0.455 else "pants"
-        if reg == "skin" and c.z < 0.80:
+            reg = "jacket" if c.z > 0.37 else "pants"
+        if reg == "skin" and c.z < 0.63:
             reg = "jacket"
         f.material_index = idx_of(region_mat[reg])
         f.smooth = True
@@ -306,7 +309,7 @@ def camper(name, outfit="walk"):
     for v in hat_v:
         weights[v] = [("head", 1.0)]
     sb = B()
-    sb.torus(Vector((0.01, 0, 0.845)), 0.095, 0.045, axis='Z')
+    sb.torus(Vector((0.01, 0, 0.655)), 0.105, 0.05, axis='Z')
     sb.use(m[o["scarf"]], smooth=True)
     sc_v, sc_f = _append_B(bm, sb)
     for f, mat in sc_f:

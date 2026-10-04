@@ -4,7 +4,7 @@ extends Node3D
 ## 植物模型來自 Kenney Nature Kit，材質依名稱統一換成森林配色。
 
 const NATURE := "res://assets/nature/"
-const SIZE := 44.0           # 地台邊長，世界範圍 [-22, 22]
+const SIZE := 52.0           # 地台邊長，世界範圍 [-26, 26]
 const STEP := 0.35           # 地形頂點間距
 const BASE_Y := -7.0         # 地台底部
 const MASK_RES := 256
@@ -393,7 +393,20 @@ var walk_debug := false
 const WALK_SPAWN := Vector2(-5.0, -1.2)   # 營火與桌子之間的空地（營地平整墊內，沒有樹）
 const CHAIR_OFFS := [Vector2(-1.7, 0.9), Vector2(0.7, 1.8), Vector2(1.9, -0.7)]
 const HELP_ORBIT := "拖曳旋轉　滾輪縮放　N 日／黃昏／夜（30 秒漸變）　A 自動循環　M 靜音　P 散步"
-const HELP_WALK := "WASD／方向鍵 走路　Shift 跑　拖曳轉鏡頭　滾輪遠近　P 回到環繞視角"
+const HELP_WALK := "WASD／方向鍵 走路　Shift 跑　E 互動　拖曳轉鏡頭　滾輪遠近　P 回到環繞視角"
+
+# 小任務（散步模式）：烤棉花糖的露營者想要紅蘑菇——按 E 跟她說話接任務、照記號採 5 朵、回營火交差
+enum Quest { NONE, ACTIVE, DONE }
+var quest := Quest.NONE
+var quest_need := 5
+var quest_got := 0
+var quest_items: Array[Dictionary] = []   # {node, marker, pos, base_y}
+var roaster_pos := Vector2.ZERO           # 烤棉花糖露營者的位置（_build_campers 設定）
+var quest_label: Label                    # 左上：任務進度
+var msg_label: Label                      # 下方置中：對話（計時）與互動提示
+var say_t := 0.0
+var celebrate_t := 0.0                    # 交差後兩位露營者歡呼的秒數
+var fire_boost := 1.0                     # 交差後營火變旺
 var night_mats := {}   # 材質名 → [StandardMaterial3D]，夜晚要開自發光的（車燈罩、尾燈）
 const NIGHT_MATS := ["headlightGlass", "tailRed"]
 var bench_t := 0.0
@@ -406,7 +419,7 @@ var cam: Camera3D
 var attrs: CameraAttributesPractical
 var yaw := deg_to_rad(38.0)
 var pitch := deg_to_rad(-33.0)
-var dist := 72.0
+var dist := 80.0
 var idle := 0.0
 var dragging := false
 
@@ -960,7 +973,7 @@ func _build_forest() -> void:
 		xfs[nm] = [] as Array[Transform3D]
 		cols[nm] = [] as Array[Color]
 	var half := SIZE * 0.5 - 1.8
-	var spacing := 2.5
+	var spacing := 2.6   # 地圖加大後稍微拉開一點，樹的總數才不會爆掉
 	var cells := int((half * 2.0) / spacing)
 	var count := 0
 	for j in cells:
@@ -1013,25 +1026,26 @@ func _scatter(model_name: String, count: int, s_min: float, s_max: float, y_off:
 
 func _build_understory() -> void:
 	# 全部是 tools/gen_assets.py 產的（assets/gen/）
-	_scatter("gen/bush_A", 60, 2.0, 3.0, -0.05, 1.2)
-	_scatter("gen/bush_B", 50, 2.0, 3.0, -0.05, 1.2)
-	_scatter("gen/bush_C", 40, 2.2, 3.2, -0.05, 1.4)
-	_scatter("gen/fern_A", 90, 1.8, 2.6, -0.04, 1.6, false)
-	_scatter("gen/fern_B", 70, 1.8, 2.6, -0.04, 1.6, false)
-	_scatter("gen/pine_small", 40, 2.2, 3.2, -0.1, 1.6)
-	_scatter("gen/mushroom_red", 50, 1.6, 2.4, -0.03, 1.8, false)
-	_scatter("gen/mushroom_tan_group", 40, 1.6, 2.4, -0.03, 1.8, false)
-	_scatter("gen/flower_yellow", 160, 2.0, 2.8, -0.03, -0.9, false)
-	_scatter("gen/flower_purple", 90, 2.0, 2.8, -0.03, -0.9, false)
-	_scatter("gen/flower_red", 70, 2.0, 2.8, -0.03, -0.9, false)
-	_scatter("gen/rock_small_A", 30, 1.6, 2.8, -0.04, 0.0)
-	_scatter("gen/rock_small_B", 30, 1.6, 2.8, -0.04, 0.0)
-	_scatter("gen/rock_large_A", 14, 2.0, 3.0, -0.08, 0.0)
-	_scatter("gen/rock_large_B", 12, 2.0, 3.0, -0.08, 0.0)
-	_scatter("gen/log_A", 10, 2.0, 3.0, -0.02, 1.0)
-	_scatter("gen/log_B", 8, 2.0, 3.0, -0.02, 1.0)
-	_scatter("gen/stump_A", 12, 2.0, 2.8, -0.03, 1.0)
-	_scatter("gen/stump_B", 8, 2.0, 2.8, -0.03, 1.0)
+	# 數量跟著地台面積（44→52 m，約 ×1.4）放大
+	_scatter("gen/bush_A", 85, 2.0, 3.0, -0.05, 1.2)
+	_scatter("gen/bush_B", 70, 2.0, 3.0, -0.05, 1.2)
+	_scatter("gen/bush_C", 55, 2.2, 3.2, -0.05, 1.4)
+	_scatter("gen/fern_A", 125, 1.8, 2.6, -0.04, 1.6, false)
+	_scatter("gen/fern_B", 100, 1.8, 2.6, -0.04, 1.6, false)
+	_scatter("gen/pine_small", 55, 2.2, 3.2, -0.1, 1.6)
+	_scatter("gen/mushroom_red", 70, 1.6, 2.4, -0.03, 1.8, false)
+	_scatter("gen/mushroom_tan_group", 55, 1.6, 2.4, -0.03, 1.8, false)
+	_scatter("gen/flower_yellow", 220, 2.0, 2.8, -0.03, -0.9, false)
+	_scatter("gen/flower_purple", 125, 2.0, 2.8, -0.03, -0.9, false)
+	_scatter("gen/flower_red", 100, 2.0, 2.8, -0.03, -0.9, false)
+	_scatter("gen/rock_small_A", 42, 1.6, 2.8, -0.04, 0.0)
+	_scatter("gen/rock_small_B", 42, 1.6, 2.8, -0.04, 0.0)
+	_scatter("gen/rock_large_A", 20, 2.0, 3.0, -0.08, 0.0)
+	_scatter("gen/rock_large_B", 17, 2.0, 3.0, -0.08, 0.0)
+	_scatter("gen/log_A", 14, 2.0, 3.0, -0.02, 1.0)
+	_scatter("gen/log_B", 11, 2.0, 3.0, -0.02, 1.0)
+	_scatter("gen/stump_A", 17, 2.0, 2.8, -0.03, 1.0)
+	_scatter("gen/stump_B", 11, 2.0, 2.8, -0.03, 1.0)
 
 
 func _build_props() -> void:
@@ -1137,16 +1151,17 @@ func _build_campers(chair: Vector2) -> void:
 	# 烤棉花糖的：坐在紅椅子上，跟椅子同一個朝向（模型 +X 面向營火）
 	var d: Vector2 = FIRE - chair
 	var rot := atan2(-d.y, d.x)
+	roaster_pos = chair
 	var roaster := _spawn_camper("camper_roast", chair.x, chair.y, rot, 0.0, "roast")
 	roaster["stick"] = _attach_prop(roaster, "hand_r", "gen/marshmallow_stick")
 	var side := Basis(Vector3.UP, rot) * Vector3(-0.1, 0.0, 0.5)
 	place_one("gen/marshmallow_bag", chair.x + side.x, chair.y + side.z, 1.0, rot + 0.4, 0.0)
-	# 手沖咖啡的：站在桌邊的木箱上（桌子對 2.8 頭身來說太高），壺嘴正對桌上的濾杯
+	# 手沖咖啡的：站在桌邊加高的木箱上（桌子對三頭身來說太高），壺嘴正對桌上的濾杯
 	var tb := Basis(Vector3.UP, 0.35)   # 桌子的朝向（和 place_one 給桌子的 rot 一樣）
 	var tp := Vector3(TABLE.x, 0.0, TABLE.y)
 	var bp := tp + tb * Vector3(-0.05, 0.0, 0.56)
-	place_one("gen/crate_A", bp.x, bp.z, 1.0, 0.35, 0.0)
-	var brewer := _spawn_camper("camper_brew", bp.x, bp.z, 0.35 + PI / 2.0, 0.38, "brew")
+	place_one("gen/crate_A", bp.x, bp.z, 1.35, 0.35, 0.0)   # 三頭身搆不到桌上的濾杯，墊高一點的木箱
+	var brewer := _spawn_camper("camper_brew", bp.x, bp.z, 0.35 + PI / 2.0, 0.50, "brew")
 	brewer["kettle"] = _attach_prop(brewer, "hand_r", "gen/kettle_hand")
 	brewer["mug"] = _attach_prop(brewer, "hand_l", "gen/mug_hand")
 	var cs := tp + tb * Vector3(0.09, 0.0, 0.0)
@@ -1202,29 +1217,47 @@ func _campers_tick(delta: float) -> void:
 		var t: float = anim_t + npc["seed"]
 		var breathe := 0.012 * sin(t * 1.5)
 		var node: Node3D = npc["node"]
+		# 有人走近就看著他（BotW 的 NPC 都會這樣）：頭轉向散步角色，權重隨距離淡入
+		var look_yaw := 0.0
+		var look_w := 0.0
+		if walk_mode and walker and walker.visible:
+			var dvw: Vector3 = walker.global_position - node.global_position
+			var dw := Vector2(dvw.x, dvw.z).length()
+			if dw < 4.5:
+				var diff := wrapf(atan2(-dvw.z, dvw.x) - node.rotation.y, -PI, PI)
+				if absf(diff) < 1.6:
+					look_yaw = clampf(diff, -0.95, 0.95)
+					look_w = clampf((4.5 - dw) / 2.0, 0.0, 1.0)
 		if npc["kind"] == "roast":
-			# 坐著：髖在椅面上、大腿往前、小腿垂下；右手握棍慢慢轉、偶爾抬高看一眼，左手放腿上
-			var lift := 0.04 * sin(t * 0.45) + 0.02 * sin(t * 1.1)
+			# 坐著：髖在椅面上、短腿往前垂（三頭身坐椅子腳搆不到地，晃著更可愛）；右手握棍慢慢轉，左手放腿上
+			var lift := 0.03 * sin(t * 0.45) + 0.015 * sin(t * 1.1)
 			rig.torso(Vector3(0.02, 0.515, 0.0), 0.0, -0.08 + breathe, 0.02 * sin(t * 0.3), 0.0, breathe * 0.5,
-				0.15 * sin(t * 0.37) - 0.1, 0.12 + 0.05 * sin(t * 0.8), 0.03 * sin(t * 0.5))
-			rig.leg("l", Vector3(0.21, 0.21, -0.09), Vector3(0.3, -0.95, 0.0), Vector3.RIGHT)
-			rig.leg("r", Vector3(0.22, 0.20, 0.09), Vector3(0.35, -0.94, 0.0), Vector3.RIGHT)
-			rig.arm("r", Vector3(0.21, 0.63 + lift, 0.09), Vector3(-0.6, -0.8, 0.3))
-			rig.arm("l", Vector3(0.14, 0.52, -0.12), Vector3(-0.6, -0.8, -0.3))
+				lerpf(0.15 * sin(t * 0.37) - 0.1, look_yaw, look_w), 0.12 + 0.05 * sin(t * 0.8) - 0.06 * look_w, 0.03 * sin(t * 0.5))
+			rig.leg("l", Vector3(0.14, 0.26 + 0.01 * sin(t * 1.3), -0.085), Vector3(0.3, -0.95, 0.0), Vector3.RIGHT)
+			rig.leg("r", Vector3(0.15, 0.25 + 0.01 * sin(t * 1.3 + 1.7), 0.085), Vector3(0.35, -0.94, 0.0), Vector3.RIGHT)
+			if celebrate_t > 0.0:
+				# 交差：雙手舉高揮舞
+				var wv := sin(anim_t * 7.0)
+				rig.arm("r", Vector3(0.05, 0.93, 0.17 + 0.04 * wv), Vector3(-0.5, -0.5, 0.5))
+				rig.arm("l", Vector3(0.05, 0.93, -0.17 - 0.04 * wv), Vector3(-0.5, -0.5, -0.5))
+			else:
+				rig.arm("r", Vector3(0.13, 0.60 + lift * 0.7, 0.10), Vector3(-0.6, -0.8, 0.3))
+				rig.arm("l", Vector3(0.10, 0.55, -0.12), Vector3(-0.6, -0.8, -0.3))
 			rig.apply()
 			(npc["stick"] as Node3D).global_transform.basis = node.global_transform.basis * Basis(Vector3.BACK, -0.10 - lift * 2.0) * Basis(Vector3.UP, 0.04 * sin(t * 0.7))
 		else:
 			# 站著手沖：每 7 秒一輪——舉壺傾倒 3 秒、放回；左手端著自己的杯子
 			var p := fmod(t, 7.0)
 			var tilt := smoothstep(0.6, 1.6, p) * (1.0 - smoothstep(4.2, 5.2, p))
-			rig.torso(Vector3(0.0, 0.50, 0.0), 0.0, 0.04 + breathe, 0.0, 0.0, breathe * 0.5, -0.15 - 0.1 * tilt, 0.22 + 0.08 * tilt, 0.0)
-			rig.leg("l", Vector3(0.01, 0.09, -0.09), Vector3.RIGHT, Vector3.RIGHT)
-			rig.leg("r", Vector3(0.01, 0.09, 0.09), Vector3.RIGHT, Vector3.RIGHT)
-			rig.arm("r", Vector3(0.25, 0.78 + 0.03 * tilt, 0.14), Vector3(-0.7, -0.6, 0.4))
-			rig.arm("l", Vector3(0.20, 0.66 + 0.01 * sin(t), -0.13), Vector3(-0.6, -0.8, -0.4))
+			rig.torso(Vector3(0.0, 0.385, 0.0), 0.0, 0.04 + breathe, 0.0, 0.0, breathe * 0.5,
+				lerpf(-0.15 - 0.1 * tilt, look_yaw, look_w), 0.22 + 0.08 * tilt - 0.1 * look_w, 0.0)
+			rig.leg("l", Vector3(0.01, 0.09, -0.085), Vector3.RIGHT, Vector3.RIGHT)
+			rig.leg("r", Vector3(0.01, 0.09, 0.085), Vector3.RIGHT, Vector3.RIGHT)
+			rig.arm("r", Vector3(0.14, 0.60 + 0.05 * tilt, 0.13), Vector3(-0.7, -0.6, 0.4))
+			rig.arm("l", Vector3(0.12, 0.52 + 0.01 * sin(t), -0.12), Vector3(-0.6, -0.8, -0.4))
 			rig.apply()
 			var kettle: Node3D = npc["kettle"]
-			kettle.global_transform.basis = node.global_transform.basis * Basis(Vector3.BACK, -0.45 * tilt)
+			kettle.global_transform.basis = node.global_transform.basis * Basis(Vector3.BACK, -0.32 * tilt)
 			(npc["mug"] as Node3D).global_transform.basis = node.global_transform.basis
 			# 水柱：從壺嘴（握把前 0.28、下 0.06）垂直落到濾杯口
 			var tip: Vector3 = kettle.global_transform * Vector3(0.28, -0.06, 0.0)
@@ -1373,6 +1406,9 @@ func _enter_walk() -> void:
 		walker = WalkerScript.new()
 		walker.ground = h
 		walker.cam_yaw = func() -> float: return yaw
+		walker.cam_fwd = func() -> float:
+			var f := Basis(Vector3.UP, yaw) * Vector3(0, 0, -1)
+			return atan2(-f.z, f.x)
 		walker.bounds = SIZE * 0.5 - 1.0
 		walker.water_y = WATER_Y
 		var sc: Node3D = (load("res://assets/gen/camper_walk.glb") as PackedScene).instantiate()
@@ -1396,7 +1432,7 @@ func _enter_walk() -> void:
 	orbit_saved = {"yaw": yaw, "pitch": pitch, "dist": dist, "pivot": pivot.position, "fov": cam.fov}
 	walk_mode = true
 	pitch = deg_to_rad(-16.0)
-	dist = 6.5
+	dist = 5.5
 	walk_cam_d = dist
 	cam.fov = 42.0
 	attrs.dof_blur_near_enabled = false
@@ -1428,6 +1464,170 @@ func _exit_walk() -> void:
 		bm.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_DISABLED
 	if help_label:
 		help_label.text = HELP_ORBIT
+
+
+# ---------------------------------------------------------------- 小任務：採紅蘑菇
+
+func _interact() -> void:
+	## 散步模式按 E：優先採腳邊的任務蘑菇，否則跟烤棉花糖的露營者說話
+	if walker == null:
+		return
+	var wp := Vector2(walker.position.x, walker.position.z)
+	if quest == Quest.ACTIVE:
+		for qi in quest_items:
+			var p: Vector3 = qi["pos"]
+			if wp.distance_to(Vector2(p.x, p.z)) < 1.4:
+				_pick_item(qi)
+				return
+	if wp.distance_to(roaster_pos) < 2.2:
+		match quest:
+			Quest.NONE:
+				_start_quest()
+			Quest.ACTIVE:
+				if quest_got >= quest_need:
+					_complete_quest()
+				else:
+					_say("找到紅蘑菇了嗎？跟著光點走，還差 %d 朵！" % (quest_need - quest_got))
+			Quest.DONE:
+				_say("烤蘑菇真好吃～謝謝你！")
+
+
+func _start_quest() -> void:
+	quest = Quest.ACTIVE
+	_say("嗨！想吃烤蘑菇嗎？幫我採 %d 朵紅蘑菇回來——找森林裡有光點的那幾朵！" % quest_need)
+	# 在離營火 9–24 m 的可走範圍撒任務蘑菇，彼此至少隔 6 m（逼玩家繞一圈地圖）
+	var half := SIZE * 0.5 - 3.0
+	var tries := 0
+	while quest_items.size() < quest_need and tries < 600:
+		tries += 1
+		var x := rng.randf_range(-half, half)
+		var z := rng.randf_range(-half, half)
+		if blocked(x, z):
+			continue
+		if h(x, z) < WATER_Y + 0.3:
+			continue
+		var p2 := Vector2(x, z)
+		var d := p2.distance_to(FIRE)
+		if d < 9.0 or d > 24.0:
+			continue
+		var ok := true
+		for qi in quest_items:
+			if p2.distance_to(Vector2((qi["pos"] as Vector3).x, (qi["pos"] as Vector3).z)) < 6.0:
+				ok = false
+		if not ok:
+			continue
+		var node := place_one("gen/mushroom_red", x, z, 2.6, rng.randf() * TAU, -0.03)
+		# 蘑菇上方一顆琥珀色光點（上下浮動），環繞視角也看得到任務在哪
+		var marker := MeshInstance3D.new()
+		var sm := SphereMesh.new()
+		sm.radius = 0.08
+		sm.height = 0.16
+		sm.radial_segments = 10
+		sm.rings = 5
+		var mm := StandardMaterial3D.new()
+		mm.albedo_color = Color(1.0, 0.85, 0.4)
+		mm.emission_enabled = true
+		mm.emission = Color(1.0, 0.8, 0.35)
+		mm.emission_energy_multiplier = 2.2
+		sm.material = mm
+		marker.mesh = sm
+		var base_y := h(x, z) + 1.0
+		marker.position = Vector3(x, base_y, z)
+		add_child(marker)
+		quest_items.append({"node": node, "marker": marker, "pos": Vector3(x, h(x, z), z), "base_y": base_y})
+	quest_need = quest_items.size()   # 理論上一定生得滿；萬一地圖太擠就以實際數為準
+
+
+func _pick_item(qi: Dictionary) -> void:
+	quest_got += 1
+	(qi["node"] as Node).queue_free()
+	(qi["marker"] as Node).queue_free()
+	quest_items.erase(qi)
+	var p: Vector3 = qi["pos"]
+	walker.play_pick(p + Vector3(0.0, 0.2, 0.0))
+	_puff(p + Vector3(0.0, 0.3, 0.0))
+	if quest_got >= quest_need:
+		_say("採滿了！回營火找她交差吧！")
+	else:
+		_say("採到紅蘑菇！（%d/%d）" % [quest_got, quest_need])
+
+
+func _complete_quest() -> void:
+	quest = Quest.DONE
+	celebrate_t = 5.0
+	fire_boost = 1.7
+	_say("太棒了！今晚營火加菜——烤蘑菇派對！")
+	# 戰利品擺在營火邊
+	place_one("gen/mushroom_red", FIRE.x - 0.55, FIRE.y + 0.6, 1.6, 1.0, 0.0)
+	place_one("gen/mushroom_red", FIRE.x - 0.75, FIRE.y + 0.32, 1.4, 2.6, 0.0)
+
+
+func _say(text: String) -> void:
+	say_t = 4.0
+	if msg_label:
+		msg_label.text = text
+
+
+func _puff(pos: Vector3) -> void:
+	## 採集的一小撮金色亮粉（一次性，放完自己刪掉）
+	var fx := CPUParticles3D.new()
+	fx.one_shot = true
+	fx.amount = 14
+	fx.lifetime = 0.7
+	fx.explosiveness = 1.0
+	fx.position = pos
+	fx.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	fx.emission_sphere_radius = 0.12
+	fx.spread = 180.0
+	fx.gravity = Vector3(0.0, -1.5, 0.0)
+	fx.initial_velocity_min = 0.6
+	fx.initial_velocity_max = 1.2
+	var grad := Gradient.new()
+	grad.set_color(0, Color(1.0, 0.9, 0.5, 0.9))
+	grad.set_color(1, Color(1.0, 0.9, 0.5, 0.0))
+	fx.color_ramp = grad
+	var q := QuadMesh.new()
+	q.size = Vector2(0.05, 0.05)
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.vertex_color_use_as_albedo = true
+	m.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	q.material = m
+	fx.mesh = q
+	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	fx.finished.connect(fx.queue_free)
+	add_child(fx)
+	fx.emitting = true
+
+
+func _quest_tick(delta: float) -> void:
+	## 每幀：記號浮動、HUD 進度、互動提示（對話倒數時先讓對話顯示）
+	for i in quest_items.size():
+		var mk: MeshInstance3D = quest_items[i]["marker"]
+		mk.position.y = (quest_items[i]["base_y"] as float) + 0.12 * sin(anim_t * 2.6 + i * 1.3)
+	if quest_label:
+		quest_label.visible = quest == Quest.ACTIVE
+		if quest == Quest.ACTIVE:
+			quest_label.text = "任務：採紅蘑菇 %d/%d" % [quest_got, quest_need]
+	if msg_label == null:
+		return
+	if say_t > 0.0:
+		say_t -= delta
+		if say_t <= 0.0:
+			msg_label.text = ""
+		return
+	var prompt := ""
+	if walk_mode and walker:
+		var wp := Vector2(walker.position.x, walker.position.z)
+		if quest == Quest.ACTIVE:
+			for qi in quest_items:
+				var p: Vector3 = qi["pos"]
+				if wp.distance_to(Vector2(p.x, p.z)) < 1.4:
+					prompt = "按 E 採蘑菇"
+		if prompt == "" and wp.distance_to(roaster_pos) < 2.2:
+			prompt = "按 E 跟露營者說話"
+	msg_label.text = prompt
 
 
 func _string_lights(a: Vector3, b: Vector3, bulbs: int) -> void:
@@ -1521,7 +1721,7 @@ func _setup_env() -> void:
 	sun.light_energy = 1.3
 	sun.shadow_enabled = true
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
-	sun.directional_shadow_max_distance = 130.0
+	sun.directional_shadow_max_distance = 150.0
 	sun.directional_shadow_split_1 = 0.35
 	sun.shadow_blur = 2.4
 	sun.shadow_bias = 0.05
@@ -1605,9 +1805,12 @@ func _apply_camera() -> void:
 				walker.position.snapped(Vector3(0.1, 0.1, 0.1)), cp.snapped(Vector3(0.1, 0.1, 0.1)), d, dist, near, cp.y - h(cp.x, cp.z)])
 		walk_cam_d = d if d < walk_cam_d else lerpf(walk_cam_d, d, minf(1.0, 3.0 * get_process_delta_time()))
 		cam.position = Vector3(0, 0, walk_cam_d)
+		# 跑起來 FOV 微微拉寬（速度感），停下來慢慢收回
+		cam.fov = lerpf(cam.fov, 42.0 + 6.0 * clampf(walker.speed / walker.RUN, 0.0, 1.0) * walker.gait,
+			minf(1.0, 4.0 * get_process_delta_time()))
 		for lm in leaf_mats:
 			lm.set_shader_parameter("cam_pos", cam.global_position)
-			lm.set_shader_parameter("cam_target", walker.position + Vector3(0.0, 0.8, 0.0) if walker else origin)
+			lm.set_shader_parameter("cam_target", walker.position + Vector3(0.0, 0.65, 0.0) if walker else origin)
 		return
 	attrs.dof_blur_far_distance = dist + 8.0
 	attrs.dof_blur_far_transition = dist * 0.45
@@ -1633,6 +1836,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		if kc == KEY_P and not cam_locked:
 			toggle_walk()
 			return
+		if kc == KEY_E and walk_mode:
+			_interact()
+			return
 	if cam_locked:
 		return
 	if event is InputEventMouseButton:
@@ -1642,7 +1848,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
 			dist = maxf(3.0 if walk_mode else 34.0, dist * 0.92)
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
-			dist = minf(12.0 if walk_mode else 120.0, dist / 0.92)
+			dist = minf(12.0 if walk_mode else 140.0, dist / 0.92)
 		idle = 0.0
 	elif event is InputEventMouseMotion and dragging:
 		var mm := event as InputEventMouseMotion
@@ -1661,6 +1867,9 @@ func _process(delta: float) -> void:
 			set_time((tod + 1) % 3)
 	_flicker()
 	_campers_tick(delta)
+	if celebrate_t > 0.0:
+		celebrate_t -= delta
+	_quest_tick(delta)
 	if cam_locked:
 		idle = 0.0
 	if bench:
@@ -1672,7 +1881,7 @@ func _process(delta: float) -> void:
 			print("BENCH %s fps=%.1f  (%.2f ms/frame)" % [tree_dir, bench_frames / bench_acc, 1000.0 * bench_acc / bench_frames])
 			get_tree().quit()
 	if walk_mode and walker:
-		pivot.position = pivot.position.lerp(walker.position + Vector3(0.0, 0.9, 0.0), minf(1.0, 8.0 * delta))
+		pivot.position = pivot.position.lerp(walker.position + Vector3(0.0, 0.72, 0.0), minf(1.0, 8.0 * delta))
 		idle = 0.0
 	idle += delta
 	if idle > 4.0:
@@ -1784,7 +1993,7 @@ func _flicker() -> void:
 	var t := Time.get_ticks_msec() * 0.001
 	# 營火：幾個不成比例的正弦疊起來，像火在呼吸
 	var fl := 1.0 + 0.16 * sin(t * 7.3) + 0.11 * sin(t * 12.7 + 1.3) + 0.07 * sin(t * 23.1 + 2.1)
-	fire_light.light_energy = tod_cur["fire"] * fl
+	fire_light.light_energy = tod_cur["fire"] * fl * fire_boost   # 任務交差後營火加菜變旺
 	for fm in flame_mats:
 		fm.set_shader_parameter("glow", fm.get_meta("base") * (0.75 + 0.5 * (fl - 0.66)))
 	lantern_light.light_energy = tod_cur["lantern"] * (1.0 + 0.06 * sin(t * 9.1) + 0.03 * sin(t * 17.3))
@@ -1862,5 +2071,29 @@ func _build_help() -> void:
 	l.offset_top = -34
 	layer.add_child(l)
 	help_label = l
+	quest_label = Label.new()
+	quest_label.add_theme_font_override("font", font)
+	quest_label.add_theme_font_size_override("font_size", 15)
+	quest_label.add_theme_color_override("font_color", Color(1.0, 0.86, 0.5, 0.95))
+	quest_label.add_theme_color_override("font_outline_color", Color(0.15, 0.12, 0.05, 0.75))
+	quest_label.add_theme_constant_override("outline_size", 4)
+	quest_label.offset_left = 16
+	quest_label.offset_top = 14
+	quest_label.visible = false
+	layer.add_child(quest_label)
+	msg_label = Label.new()
+	msg_label.add_theme_font_override("font", font)
+	msg_label.add_theme_font_size_override("font_size", 17)
+	msg_label.add_theme_color_override("font_color", Color(0.98, 0.95, 0.85, 0.95))
+	msg_label.add_theme_color_override("font_outline_color", Color(0.1, 0.1, 0.08, 0.8))
+	msg_label.add_theme_constant_override("outline_size", 5)
+	msg_label.anchor_left = 0.0
+	msg_label.anchor_right = 1.0
+	msg_label.anchor_top = 1.0
+	msg_label.anchor_bottom = 1.0
+	msg_label.offset_top = -72
+	msg_label.offset_bottom = -44
+	msg_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	layer.add_child(msg_label)
 	if demo_len > 0.0:
 		help_label.visible = false
