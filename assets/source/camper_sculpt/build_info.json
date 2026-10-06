@@ -1,0 +1,13 @@
+{
+  "game": {
+    "triangles": 72535,
+    "material_batches": 24,
+    "rigged": false,
+    "animations": 0
+  },
+  "objects": 150,
+  "mesh_vertices": 69198,
+  "rigged": false,
+  "animations": 0,
+  "export": "/Users/a01-0220-0077/workspace/my-space/silent-camping/assets/gen/camper_male_sculpt.glb"
+}
