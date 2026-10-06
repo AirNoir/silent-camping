@@ -8,6 +8,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import treelib as T
 import proplib as P
 import camperlib as C
+import figurelib as F
+import characterlib as CH
 
 args = sys.argv[sys.argv.index("--") + 1:]
 OUT = args[0]
@@ -75,6 +77,10 @@ objs = [
     G(C.camper, "camper_walk", "walk"), G(C.camper, "camper_roast", "roast"), G(C.camper, "camper_brew", "brew"),
     G(C.marshmallow_stick, "marshmallow_stick"), G(C.kettle_hand, "kettle_hand"), G(C.mug_hand, "mug_hand"),
     G(P.coffee_set, "coffee_set"), G(P.marshmallow_bag, "marshmallow_bag"),
+    # 第四代角色原型：5 頭身微縮人偶，純色、不綁骨（先評估美術方向）
+    G(F.figure, "figure_proto"),
+    # 主角基礎模型：依角色設定板，4.5 頭身、連續身體 mesh（Skin + Subdivision）、純色霧面、尚未綁骨
+    G(CH.character, "character_base"),
 ]
 for ob in objs:
     if ob is None:
