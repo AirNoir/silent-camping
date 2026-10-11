@@ -10,7 +10,11 @@ var rotating := false
 var model: Node3D
 
 func _ready() -> void:
-	model = (load("res://assets/gen/camper_male_sculpt.glb") as PackedScene).instantiate()
+	var model_name := "camper_male_sculpt"
+	for arg: String in OS.get_cmdline_user_args():
+		if arg.begins_with("--model="):   # 例：--model=character_chibi_dressed
+			model_name = arg.trim_prefix("--model=")
+	model = (load("res://assets/gen/%s.glb" % model_name) as PackedScene).instantiate()
 	add_child(model)
 	if "--asset-check" in OS.get_cmdline_user_args():
 		var meshes := model.find_children("*", "MeshInstance3D", true, false)

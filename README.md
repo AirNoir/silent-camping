@@ -53,7 +53,9 @@
 ![water before/after](preview_water_before_after.png)
 
 ## 散步模式（實驗）
-按 **P**：鏡頭從環繞視角俯衝下來，變成跟著一個 Q 版露營者（`assets/gen/camper_walk.glb`，`scripts/walker.gd`）的第三人稱視角，
+按 **P**：鏡頭從環繞視角俯衝下來，變成跟著主角的第三人稱視角
+（主角 = `assets/gen/camper_hero.glb`——用 `tools/chibi_rig.py` 給 chibi 母檔綁骨的產物，
+檔案不存在時退回第三代程序角色 `camper_walk.glb`；控制在 `scripts/walker.gd`），
 WASD／方向鍵相對鏡頭方向走、Shift 跑、**E** 互動、拖曳轉鏡頭、滾輪拉遠近，再按 P 回到環繞視角（原本的角度與距離會還原）。
 這是用來回答「這個專案要當擺件還是可以走進去的世界」的實驗：走十分鐘，答案自己會出來。
 
@@ -93,6 +95,16 @@ WASD／方向鍵相對鏡頭方向走、Shift 跑、**E** 互動、拖曳轉鏡�
 ![trees](preview_assets_trees.png)
 ![plants](preview_assets_plants.png)
 ![props](preview_assets_props.png)
+
+## 主角（chibi）管線
+1. 造型：`assets/source/chibi_b.blend`（外部底模＋BunnyBite 髮型包組的 chibi，另見 `assets/source/chibi_c/` 的參考對照修訂）
+   → 匯出遊戲空間的 `assets/gen/character_chibi_b.glb`（腳在原點、+X 朝前、約 1.16 m）
+2. 綁骨：`$B --background --python tools/chibi_rig.py`——照 `scripts/rig.gd` 的骨名建 Armature、
+   逐頂點最近骨頭權重（髮／眼／眉 100% 跟頭、外套含袖跟軀幹＋手臂、褲跟腿、靴跟腳），
+   匯出 `assets/gen/camper_hero.glb`；改完母檔重跑這支就能更新主角
+   - **坑**：glTF 匯出器會忽略蒙皮網格的節點變換——原模型縮放在節點上，不先把物件變換攤平進頂點，
+     綁完就是 2.8 m 巨人
+3. 已知待辦：不會眨眼（眼睛是網格不是貼圖，舊的 uv offset 眨眼接不上）、61k 三角形還沒減面（`tools/camper_export.py`）
 
 ## 重新生成資產（Blender）
 ```

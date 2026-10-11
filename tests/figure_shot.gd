@@ -14,6 +14,7 @@ var CAM := Vector2(-4.6, -1.7)
 var main: Node3D
 var placed := false
 var model := "character_base"
+var model2 := "camper_walk"   # 旁邊的對照模型（--model2= 可換）
 var walkcam := false
 var walkdist := 0.0
 var orbit := Vector2.ZERO
@@ -23,12 +24,17 @@ func _initialize() -> void:
 	for arg: String in OS.get_cmdline_user_args():
 		if arg.begins_with("--model="):
 			model = arg.trim_prefix("--model=")
+		elif arg.begins_with("--model2="):
+			model2 = arg.trim_prefix("--model2=")
 		elif arg == "--walkcam":
 			walkcam = true
 		elif arg.begins_with("--walkdist="):
 			walkdist = float(arg.trim_prefix("--walkdist="))
 		elif arg.begins_with("--orbit="):
 			var o := arg.trim_prefix("--orbit=").split_floats(",")
+			orbit = Vector2(o[0], o[1])
+		elif arg.begins_with("--view="):   # 同 --orbit，但不會撞到 forest.gd 的 --orbit（那會鎖鏡頭），互動檢視用
+			var o := arg.trim_prefix("--view=").split_floats(",")
 			orbit = Vector2(o[0], o[1])
 		elif arg.begins_with("--at="):
 			var v := arg.trim_prefix("--at=").split_floats(",")
@@ -46,7 +52,7 @@ func _process(_d: float) -> bool:
 	var rot := atan2(-to_cam.y, to_cam.x)   # 模型正面是 +X
 	main.place_scene("gen/" + model, FIG.x, FIG.y, rot)
 	var side := Vector2(-to_cam.y, to_cam.x).normalized() * 0.75
-	main.place_scene("gen/camper_walk", FIG.x + side.x, FIG.y + side.y, rot)
+	main.place_scene("gen/" + model2, FIG.x + side.x, FIG.y + side.y, rot)
 	if walkcam:
 		main._enter_walk()
 		main.walker.position = Vector3(FIG.x, main.h(FIG.x, FIG.y), FIG.y)

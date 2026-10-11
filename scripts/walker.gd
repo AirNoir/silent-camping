@@ -13,7 +13,7 @@ const WALK := 1.15
 const RUN := 3.0
 const ACCEL := 10.0
 const TURN := 9.0
-const ANKLE_H := 0.09
+const ANKLE_H := 0.08
 
 var ground: Callable            # (x, z) -> 地面高度
 var cam_yaw: Callable           # () -> 鏡頭 yaw，輸入方向以它為準
@@ -164,7 +164,7 @@ func _animate(delta: float) -> void:
 	model.rotation.y = face
 	var heading := Vector3(cos(face), 0.0, -sin(face))
 	var side_w := Vector3(-heading.z, 0.0, heading.x)   # 身體右側（+Z 在模型空間）
-	stride = 0.17 + 0.085 * speed   # 三頭身的短腿：步幅跟著腿長縮
+	stride = 0.15 + 0.08 * speed   # 三頭身的短腿：步幅跟著腿長縮
 	var accel := (hv - prev_hv) / maxf(delta, 1e-4)
 	prev_hv = hv
 	# ---- 腳步：落後髖部半步就抬腳，落到預測位置；走路一次一隻腳、跑步允許短暫雙腳離地（騰空段）
@@ -213,8 +213,8 @@ func _animate(delta: float) -> void:
 		act_k = sin(PI * clampf(1.0 - act_t / 0.6, 0.0, 1.0))
 		pitch += 0.38 * act_k
 	var inv := model.global_transform.affine_inverse()
-	# 站姿髖高 0.385（rest 0.40）：膝蓋常保一點彎，腿才不會鎖直
-	var hips := Vector3(0.0, 0.385 - 0.01 * gait - 0.018 * land_k * (0.3 + 0.7 * k) + bob - 0.08 * act_k, sway)
+	# 站姿髖高 0.325（chibi 骨架 rest 0.34）：膝蓋常保一點彎，腿才不會鎖直
+	var hips := Vector3(0.0, 0.325 - 0.01 * gait - 0.018 * land_k * (0.3 + 0.7 * k) + bob - 0.07 * act_k, sway)
 	# 閒置：慢慢換重心、呼吸、東張西望
 	var breathe := 0.015 * sin(idle_t * 1.6)
 	look_timer -= delta
@@ -256,8 +256,8 @@ func _animate(delta: float) -> void:
 		var tgt: Vector3 = inv * act_pos
 		var sh: Vector3 = rig.tail("clavicle_r")
 		var dv := tgt - sh
-		if dv.length() > 0.24:
-			tgt = sh + dv.normalized() * 0.24
+		if dv.length() > 0.19:
+			tgt = sh + dv.normalized() * 0.19
 		rig.arm("r", (rig.hang_arm_target("r", 0.0, 0.10) as Vector3).lerp(tgt, act_k), Vector3(-0.4, -0.6, 0.5))
 	rig.apply()
 	rig.tick(delta)

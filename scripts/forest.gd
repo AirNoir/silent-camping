@@ -1411,7 +1411,11 @@ func _enter_walk() -> void:
 			return atan2(-f.z, f.x)
 		walker.bounds = SIZE * 0.5 - 1.0
 		walker.water_y = WATER_Y
-		var sc: Node3D = (load("res://assets/gen/camper_walk.glb") as PackedScene).instantiate()
+		# 主角：新 chibi（tools/chibi_rig.py 綁骨的 camper_hero），沒有的話退回第三代程序生成角色
+		var hero := "res://assets/gen/camper_hero.glb"
+		if not ResourceLoader.exists(hero):
+			hero = "res://assets/gen/camper_walk.glb"
+		var sc: Node3D = (load(hero) as PackedScene).instantiate()
 		for mi: MeshInstance3D in sc.find_children("*", "MeshInstance3D", true, false):
 			mi.mesh = _style_mesh(mi.mesh)
 			for i in mi.mesh.get_surface_count():
